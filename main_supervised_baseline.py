@@ -18,9 +18,14 @@ import sys
 from data_preprocess.data_preprocess_utils import normalize
 from scipy import signal
 from copy import deepcopy
-import fitlog
+import wandb
 from utils import tsne, mds, _logger
-# fitlog.debug()
+import config
+import pdb
+
+wandb.login()
+
+
 
 parser = argparse.ArgumentParser(description='argument setting of network')
 parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
@@ -31,15 +36,12 @@ parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
 
 # dataset
-parser.add_argument('--dataset', type=str, default='ucihar', choices=['oppor', 'ucihar', 'shar', 'hhar'], help='name of dataset')
+parser.add_argument('--dataset', type=str, default='hr', choices=['hr'], help='name of dataset')
 parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
-parser.add_argument('--len_sw', type=int, default=30, help='length of sliding window')
-parser.add_argument('--n_class', type=int, default=18, help='number of class')
-parser.add_argument('--cases', type=str, default='random', choices=['random', 'subject', 'subject_large', 'cross_device', 'joint_device'], help='name of scenarios')
-parser.add_argument('--split_ratio', type=float, default=0.2, help='split ratio of test/val: train(0.64), val(0.16), test(0.2)')
-parser.add_argument('--target_domain', type=str, default='0', help='the target domain, [0 to 29] for ucihar, '
-                                                                   '[1,2,3,5,6,9,11,13,14,15,16,17,19,20,21,22,23,24,25,29] for shar, '
-                                                                   '[a-i] for hhar')
+#parser.add_argument('--len_sw', type=int, default=30, help='length of sliding window')
+parser.add_argument('--n_class', type=int, default=1, help='number of class')
+parser.add_argument('--split', type=int, default=0, help='split number')
+#parser.add_argument('--split_ratio', type=float, default=0.2, help='split ratio of test/val: train(0.64), val(0.16), test(0.2)')
 
 # backbone model
 parser.add_argument('--backbone', type=str, default='DCL', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer'], help='name of framework')
@@ -50,16 +52,17 @@ parser.add_argument('--logdir', type=str, default='log/', help='log directory')
 # AE & CNN_AE
 parser.add_argument('--lambda1', type=float, default=1.0, help='weight for reconstruction loss when backbone in [AE, CNN_AE]')
 
-# hhar
-parser.add_argument('--device', type=str, default='Phones', choices=['Phones', 'Watch'], help='data of which device to use (random case); data of which device to be used as training data (cross-device case, data from the other device as test data)')
+
+
+
 
 # create directory for saving and plots
 global plot_dir_name
-plot_dir_name = 'plot/'
-if not os.path.exists(plot_dir_name):
-    os.makedirs(plot_dir_name)
+plot_dir_name = config.plot_dir
 
-def train(args, train_loaders, val_loader, model, DEVICE, optimizer, criterion):
+os.makedirs(plot_dir_name, exist_ok=True)
+
+def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
     min_val_loss = 1e8
     for epoch in range(args.n_epoch):
         logger.debug(f'\nEpoch : {epoch}')
@@ -69,28 +72,28 @@ def train(args, train_loaders, val_loader, model, DEVICE, optimizer, criterion):
         total = 0
         correct = 0
         model.train()
-        for loader_idx, train_loader in enumerate(train_loaders):
-            for idx, (sample, target, domain) in enumerate(train_loader):
-                n_batches += 1
-                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
-                if args.backbone[-2:] == 'AE':
-                    out, x_decoded = model(sample)
-                else:
-                    out, _ = model(sample)
-                loss = criterion(out, target)
-                if args.backbone[-2:] == 'AE':
-                    # print(loss.item(), nn.MSELoss()(sample, x_decoded).item())
-                    loss += nn.MSELoss()(sample, x_decoded) * args.lambda1
-                train_loss += loss.item()
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                _, predicted = torch.max(out.data, 1)
-                total += target.size(0)
-                correct += (predicted == target).sum()
+
+        for idx, (sample, target, domain) in enumerate(train_loader):
+            n_batches += 1
+            sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
+            if args.backbone[-2:] == 'AE':
+                out, x_decoded = model(sample)
+            else:
+                out, _ = model(sample)
+            # TODO: Seems like dataloader returns a weird array of int values, change this to float and remove the zeros
+            loss = criterion(out, target)
+            if args.backbone[-2:] == 'AE':
+                # print(loss.item(), nn.MSELoss()(sample, x_decoded).item())
+                loss += nn.MSELoss()(sample, x_decoded) * args.lambda1
+            train_loss += loss.item()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            _, predicted = torch.max(out.data, 1)
+            total += target.size(0)
+            correct += (predicted == target).sum()
         acc_train = float(correct) * 100.0 / total
-        fitlog.add_loss(train_loss / n_batches, name="Train Loss", step=epoch)
-        fitlog.add_metric({"dev": {"Train Acc": acc_train}}, step=epoch)
+        wandb.log({"Train Loss": train_loss / n_batches, "Train Acc": acc_train,  "epoch": epoch})
         logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain Accuracy     : {acc_train:2.4f}\n')
 
         if val_loader is None:
@@ -120,8 +123,7 @@ def train(args, train_loaders, val_loader, model, DEVICE, optimizer, criterion):
                     total += target.size(0)
                     correct += (predicted == target).sum()
                 acc_val = float(correct) * 100.0 / total
-                fitlog.add_loss(val_loss / n_batches, name="Val Loss", step=epoch)
-                fitlog.add_metric({"dev": {"Val Acc": acc_val}}, step=epoch)
+                wandb.log({"Train Loss": train_loss / n_batches, "Train Acc": acc_train,  "epoch": epoch})
                 logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal Accuracy     : {acc_val:2.4f}\n')
 
                 if val_loss <= min_val_loss:
@@ -164,16 +166,15 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                 feats = torch.cat((feats, features), 0)
 
         acc_test = float(correct) * 100.0 / total
-
-    fitlog.add_best_metric({"dev": {"Test Loss": total_loss / n_batches}})
-    fitlog.add_best_metric({"dev": {"Test Acc": acc_test}})
+    wandb.log({"Test Loss": total_loss / n_batches, "Test Acc": acc_test})
 
     logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest Accuracy     : {acc_test:2.4f}\n')
     for t, p in zip(trgs.view(-1), prds.view(-1)):
         confusion_matrix[t.long(), p.long()] += 1
     logger.debug(confusion_matrix)
     logger.debug(confusion_matrix.diag() / confusion_matrix.sum(1))
-    fitlog.add_hyper(confusion_matrix, name='conf_mat')
+    wandb.log({"conf_mat": confusion_matrix})
+
     if plt == True:
         tsne(feats, trgs, domain=None, save_dir=plot_dir_name + args.model_name + '_tsne.png')
         mds(feats, trgs, domain=None, save_dir=plot_dir_name + args.model_name + 'mds.png')
@@ -185,6 +186,12 @@ if __name__ == '__main__':
     torch.manual_seed(10)
     np.random.seed(10)
     args = parser.parse_args()
+    run = wandb.init(
+    # Set the project where this run will be logged
+    project="hr_ssl",
+    # Track hyperparameters and run metadata
+    config=vars(args))
+
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
     print('device:', DEVICE, 'dataset:', args.dataset)
 
@@ -220,12 +227,8 @@ if __name__ == '__main__':
     logger = _logger(log_file_name)
     logger.debug(args)
 
-    # fitlog
-    fitlog.set_log_dir(args.logdir)
-    fitlog.add_hyper(args)
-    fitlog.add_hyper_in_file(__file__)
-
-    criterion = nn.CrossEntropyLoss()
+    # we're doing regression here
+    criterion = nn.MSELoss()
 
     parameters = model.parameters()
     optimizer = torch.optim.Adam(parameters, args.lr)

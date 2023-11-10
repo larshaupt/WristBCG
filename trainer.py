@@ -9,9 +9,7 @@ import time
 from models.frameworks import *
 from models.backbones import *
 from models.loss import *
-from data_preprocess import data_preprocess_ucihar
-from data_preprocess import data_preprocess_shar
-from data_preprocess import data_preprocess_hhar
+from data_preprocess import data_preprocess_hhar, data_preprocess_hr
 
 from sklearn.metrics import f1_score
 import seaborn as sns
@@ -30,20 +28,6 @@ if not os.path.exists(plot_dir_name):
 
 
 def setup_dataloaders(args):
-    if args.dataset == 'ucihar':
-        args.n_feature = 9
-        args.len_sw = 128
-        args.n_class = 6
-        if args.cases not in ['subject', 'subject_large']:
-            args.target_domain == '0'
-        train_loaders, val_loader, test_loader = data_preprocess_ucihar.prep_ucihar(args, SLIDING_WINDOW_LEN=args.len_sw, SLIDING_WINDOW_STEP=int( args.len_sw * 0.5))
-    if args.dataset == 'shar':
-        args.n_feature = 3
-        args.len_sw = 151
-        args.n_class = 17
-        if args.cases not in ['subject', 'subject_large']:
-            args.target_domain == '1'
-        train_loaders, val_loader, test_loader = data_preprocess_shar.prep_shar(args, SLIDING_WINDOW_LEN=args.len_sw, SLIDING_WINDOW_STEP=int(args.len_sw * 0.5))
     if args.dataset == 'hhar':
         args.n_feature = 6
         args.len_sw = 100
@@ -54,6 +38,11 @@ def setup_dataloaders(args):
                                                                                 device=args.device,
                                                                                 train_user=source_domain,
                                                                                 test_user=args.target_domain)
+    elif args.dataset == 'hr':
+        args.n_feature = 1
+        args.len_sw = 100
+        args.n_class = 1
+        train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args)
 
     return train_loaders, val_loader, test_loader
 
