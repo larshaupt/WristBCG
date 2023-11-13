@@ -39,7 +39,7 @@ def setup_dataloaders(args):
                                                                                 train_user=source_domain,
                                                                                 test_user=args.target_domain)
     elif args.dataset == 'hr':
-        args.n_feature = 1
+        args.n_feature = 3
         args.len_sw = 100
         args.n_class = 1
         train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args)

@@ -22,11 +22,13 @@ import wandb
 from utils import tsne, mds, _logger
 import config
 import pdb
+from tqdm import tqdm
 
 wandb.login()
 
 
-
+# Parse command line arguments
+##################
 parser = argparse.ArgumentParser(description='argument setting of network')
 parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
 # hyperparameter
@@ -56,46 +58,59 @@ parser.add_argument('--lambda1', type=float, default=1.0, help='weight for recon
 
 
 
-# create directory for saving and plots
+# Create directory for saving and plots
+##################
 global plot_dir_name
 plot_dir_name = config.plot_dir
 
 os.makedirs(plot_dir_name, exist_ok=True)
 
+# Training function
+#######################
+
 def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
+    
     min_val_loss = 1e8
-    for epoch in range(args.n_epoch):
+    num_epochs = args.n_epoch
+   
+
+    for epoch in range(num_epochs): # loop over epochs
+            
         logger.debug(f'\nEpoch : {epoch}')
 
         train_loss = 0
         n_batches = 0
         total = 0
-        correct = 0
+        mae = 0
+        mae_train = 0
+        
         model.train()
+        with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training", unit='batch') as tepoch:
+            for idx, (sample, target, domain) in enumerate(tepoch): # loop over training batches
+                #pdb.set_trace()
+                n_batches += 1
+                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
+                if args.backbone[-2:] == 'AE':
+                    out, x_decoded = model(sample)
+                else:
+                    out, _ = model(sample)
+                loss = criterion(out, target)
+                if args.backbone[-2:] == 'AE':
+                    # print(loss.item(), nn.MSELoss()(sample, x_decoded).item())
+                    loss += nn.MSELoss()(sample, x_decoded) * args.lambda1
+                train_loss += loss.item()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                predicted = out.data
+                total += target.size(0)
+                mae += torch.abs(predicted - target).sum()
 
-        for idx, (sample, target, domain) in enumerate(train_loader):
-            n_batches += 1
-            sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
-            if args.backbone[-2:] == 'AE':
-                out, x_decoded = model(sample)
-            else:
-                out, _ = model(sample)
-            # TODO: Seems like dataloader returns a weird array of int values, change this to float and remove the zeros
-            loss = criterion(out, target)
-            if args.backbone[-2:] == 'AE':
-                # print(loss.item(), nn.MSELoss()(sample, x_decoded).item())
-                loss += nn.MSELoss()(sample, x_decoded) * args.lambda1
-            train_loss += loss.item()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            _, predicted = torch.max(out.data, 1)
-            total += target.size(0)
-            correct += (predicted == target).sum()
-        acc_train = float(correct) * 100.0 / total
-        wandb.log({"Train Loss": train_loss / n_batches, "Train Acc": acc_train,  "epoch": epoch})
-        logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain Accuracy     : {acc_train:2.4f}\n')
-
+                tepoch.set_postfix(loss=loss.item())
+        mae_train = mae / n_batches
+        wandb.log({"Train Loss": train_loss / n_batches, "Train MAE": mae_train,  "epoch": epoch})
+        logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\n')
+    
         if val_loader is None:
             best_model = deepcopy(model.state_dict())
             model_dir = save_dir + args.model_name + '.pt'
@@ -107,24 +122,27 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 val_loss = 0
                 n_batches = 0
                 total = 0
-                correct = 0
-                for idx, (sample, target, domain) in enumerate(val_loader):
-                    n_batches += 1
-                    sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
-                    if args.backbone[-2:] == 'AE':
-                        out, x_decoded = model(sample)
-                    else:
-                        out, _ = model(sample)
-                    loss = criterion(out, target)
-                    if args.backbone[-2:] == 'AE':
-                        loss += nn.MSELoss()(sample, x_decoded) * args.lambda1
-                    val_loss += loss.item()
-                    _, predicted = torch.max(out.data, 1)
-                    total += target.size(0)
-                    correct += (predicted == target).sum()
-                acc_val = float(correct) * 100.0 / total
-                wandb.log({"Train Loss": train_loss / n_batches, "Train Acc": acc_train,  "epoch": epoch})
-                logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal Accuracy     : {acc_val:2.4f}\n')
+                mae_val = 0
+                mae = 0
+                with tqdm(val_loader, desc=f"Validation", unit='batch') as tepoch:
+                    for idx, (sample, target, domain) in enumerate(tepoch):
+                        n_batches += 1
+                        sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
+                        if args.backbone[-2:] == 'AE':
+                            out, x_decoded = model(sample)
+                        else:
+                            out, _ = model(sample)
+                        loss = criterion(out, target)
+                        if args.backbone[-2:] == 'AE':
+                            loss += nn.MSELoss()(sample, x_decoded) * args.lambda1
+                        val_loss += loss.item()
+                        predicted = out.data
+                        total += target.size(0)
+                        mae += torch.abs(predicted - target).sum()
+                        tepoch.set_postfix(val_loss=loss.item())
+                mae_val = mae / n_batches
+                wandb.log({"Train Loss": train_loss / n_batches, "Train MAE": mae_val,  "epoch": epoch})
+                logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\n')
 
                 if val_loss <= min_val_loss:
                     min_val_loss = val_loss
@@ -136,6 +154,8 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
 
     return best_model
 
+# Testing function
+#######################
 def test(test_loader, model, DEVICE, criterion, plt=False):
     with torch.no_grad():
         model.eval()
@@ -149,7 +169,7 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
         confusion_matrix = torch.zeros(args.n_class, args.n_class)
         for idx, (sample, target, domain) in enumerate(test_loader):
             n_batches += 1
-            sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
+            sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
             out, features = model(sample)
             loss = criterion(out, target)
             total_loss += loss.item()
@@ -182,21 +202,28 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
         sns_plot.get_figure().savefig(plot_dir_name + args.model_name + '_confmatrix.png')
     return total_loss
 
+# Main function
+#######################
 if __name__ == '__main__':
     torch.manual_seed(10)
     np.random.seed(10)
     args = parser.parse_args()
+
+    # Initialize W&B
     run = wandb.init(
     # Set the project where this run will be logged
     project="hr_ssl",
     # Track hyperparameters and run metadata
     config=vars(args))
 
+    # Set device
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
     print('device:', DEVICE, 'dataset:', args.dataset)
 
+    # Load data
     train_loaders, val_loader, test_loader = setup_dataloaders(args)
 
+    # Initialize model
     if args.backbone == 'FCN':
         model = FCN(n_channels=args.n_feature, n_classes=args.n_class, backbone=False)
     elif args.backbone == 'DCL':
@@ -214,25 +241,30 @@ if __name__ == '__main__':
 
     model = model.to(DEVICE)
 
+    # Set model name
     args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_sw' + str(args.len_sw)
 
+    # Create directory for results
     save_dir = 'results/'
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    # log
+    # Initialize logger
     if os.path.isdir(args.logdir) == False:
         os.makedirs(args.logdir)
     log_file_name = os.path.join(args.logdir, args.model_name + f".log")
     logger = _logger(log_file_name)
     logger.debug(args)
 
-    # we're doing regression here
+    # Loss function for regression
     criterion = nn.MSELoss()
 
+    # Initialize optimizer
     parameters = model.parameters()
     optimizer = torch.optim.Adam(parameters, args.lr)
 
+    # Training
+    #######################
     training_start = datetime.now()
     train_loss_list = []
     test_loss_list = []
@@ -254,6 +286,7 @@ if __name__ == '__main__':
     else:
         NotImplementedError
 
+    # Testing
     model_test.load_state_dict(best_model)
     model_test = model_test.to(DEVICE)
     test_loss = test(test_loader, model_test, DEVICE, criterion, plt=False)

@@ -7,3 +7,9 @@ data_preprocess/data_preprocess_uea.py
 main_uea.py
 trainer_uea.py
 uea_script.sh
+models/__pycache__/
+__pycache__/
+log/
+data_preprocess/__pycache__/
+wandb/
+results/

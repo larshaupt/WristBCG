@@ -23,7 +23,9 @@ class data_loader_hr(Dataset):
         self.domains = domains
 
     def __getitem__(self, index):
+        #print('index: ', index)
         sample, target, domain = self.samples[index], self.labels[index], self.domains[index]
+
         return sample, target, domain
 
     def __len__(self):
@@ -75,7 +77,8 @@ def prep_hr(args):
 
 
     train_set = data_loader_hr(x_train, y_train, d_train)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
+    train_sampler = torch.utils.data.sampler.SequentialSampler(train_set)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, sampler=train_sampler, num_workers=0)
 
     test_set = data_loader_hr(x_test, y_test, d_test)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
