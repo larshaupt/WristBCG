@@ -23,6 +23,7 @@ from utils import tsne, mds, _logger
 import config
 import pdb
 from tqdm import tqdm
+import pandas as pd
 
 wandb.login()
 
@@ -31,6 +32,7 @@ wandb.login()
 ##################
 parser = argparse.ArgumentParser(description='argument setting of network')
 parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
+parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
 # hyperparameter
 parser.add_argument('--batch_size', type=int, default=64, help='batch size of training')
 parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
@@ -38,7 +40,7 @@ parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
 
 # dataset
-parser.add_argument('--dataset', type=str, default='hr', choices=['hr'], help='name of dataset')
+parser.add_argument('--dataset', type=str, default='hr_max', choices=['hr_apple','hr_max'], help='name of dataset')
 parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
 #parser.add_argument('--len_sw', type=int, default=30, help='length of sliding window')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
@@ -69,7 +71,7 @@ os.makedirs(plot_dir_name, exist_ok=True)
 #######################
 
 def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
-    
+
     min_val_loss = 1e8
     num_epochs = args.n_epoch
    
@@ -108,7 +110,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
 
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
-        wandb.log({"Train Loss": train_loss / n_batches, "Train MAE": mae_train,  "epoch": epoch})
+        wandb.log({"Train Loss": train_loss / n_batches, "Train MAE": mae_train}, step=epoch)
         logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\n')
     
         if val_loader is None:
@@ -140,8 +142,20 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                         total += target.size(0)
                         mae += torch.abs(predicted - target).sum()
                         tepoch.set_postfix(val_loss=loss.item())
+                        # Logs some signals for visualization to WandB
+                        if idx == 0:
+                            _sample = sample[0,...].cpu().numpy()
+                            logging_table = pd.DataFrame({
+                                                "acc_x": sample[_sample[:,0]], 
+                                                "acc_y": sample[_sample[:,1]], 
+                                                "acc_z": sample[_sample[:,2]], 
+                                                "hr_true": target[0,...].cpu().numpy(), 
+                                                "hr_pred": predicted[0,...].cpu().numpy()
+                                                })
+                            wandb.log({"val_signal": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+
                 mae_val = mae / n_batches
-                wandb.log({"Train Loss": train_loss / n_batches, "Train MAE": mae_val,  "epoch": epoch})
+                wandb.log({"Val Loss": val_loss / n_batches, "Val MAE": mae_val}, step=epoch)
                 logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\n')
 
                 if val_loss <= min_val_loss:

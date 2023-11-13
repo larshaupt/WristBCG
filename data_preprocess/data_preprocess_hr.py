@@ -71,14 +71,17 @@ def load_data(data_path, split=0):
 
 
 def prep_hr(args):
-    data_path = config.data_dir_Max_processed
+    if args.dataset == 'hr_max':
+        data_path = config.data_dir_Max_processed
+    elif args.dataset == 'hr_apple':
+        data_path = config.data_dir_Apple_processed
     x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=args.split)
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
 
     train_set = data_loader_hr(x_train, y_train, d_train)
     train_sampler = torch.utils.data.sampler.SequentialSampler(train_set)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, sampler=train_sampler, num_workers=0)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, sampler=train_sampler, num_workers=args.num_workers, pin_memory=True)
 
     test_set = data_loader_hr(x_test, y_test, d_test)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)

@@ -38,11 +38,14 @@ def setup_dataloaders(args):
                                                                                 device=args.device,
                                                                                 train_user=source_domain,
                                                                                 test_user=args.target_domain)
-    elif args.dataset == 'hr':
+    elif args.dataset == 'hr_max' or args.dataset == 'hr_apple':
         args.n_feature = 3
         args.len_sw = 100
         args.n_class = 1
         train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args)
+    
+    else:
+        NotImplementedError(args.dataset)
 
     return train_loaders, val_loader, test_loader
 
