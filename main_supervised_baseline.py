@@ -95,6 +95,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 if args.backbone[-2:] == 'AE':
                     out, x_decoded = model(sample)
                 else:
+                    # TODO: prediction is the same for all samples in epoch, even for different architectures, fix that
                     out, _ = model(sample)
                 loss = criterion(out, target)
                 if args.backbone[-2:] == 'AE':
@@ -126,6 +127,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 total = 0
                 mae_val = 0
                 mae = 0
+                hr_true, hr_pred = [], []
                 with tqdm(val_loader, desc=f"Validation", unit='batch') as tepoch:
                     for idx, (sample, target, domain) in enumerate(tepoch):
                         n_batches += 1
@@ -143,16 +145,15 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                         mae += torch.abs(predicted - target).sum()
                         tepoch.set_postfix(val_loss=loss.item())
                         # Logs some signals for visualization to WandB
-                        if idx == 0:
-                            _sample = sample[0,...].cpu().numpy()
-                            logging_table = pd.DataFrame({
-                                                "acc_x": sample[_sample[:,0]], 
-                                                "acc_y": sample[_sample[:,1]], 
-                                                "acc_z": sample[_sample[:,2]], 
-                                                "hr_true": target[0,...].cpu().numpy(), 
-                                                "hr_pred": predicted[0,...].cpu().numpy()
-                                                })
-                            wandb.log({"val_signal": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+                        hr_true.extend(target[0,...].cpu().tolist())
+                        hr_pred.extend(predicted[0,...].cpu().tolist())
+
+
+                logging_table = pd.DataFrame({ 
+                                    "hr_true": hr_true, 
+                                    "hr_pred": hr_pred
+                                    })
+                wandb.log({"hr_true_vs_pred": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
 
                 mae_val = mae / n_batches
                 wandb.log({"Val Loss": val_loss / n_batches, "Val MAE": mae_val}, step=epoch)

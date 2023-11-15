@@ -1,6 +1,11 @@
 import argparse
 from trainer import *
+import wandb
 
+wandb.login()
+
+# Parse command line arguments
+##################
 parser = argparse.ArgumentParser(description='argument setting of network')
 parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
 # hyperparameter

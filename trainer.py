@@ -13,7 +13,7 @@ from data_preprocess import data_preprocess_hhar, data_preprocess_hr
 
 from sklearn.metrics import f1_score
 import seaborn as sns
-import fitlog
+import wandb
 from copy import deepcopy
 
 # create directory for saving models and plots
@@ -167,10 +167,14 @@ def setup(args, DEVICE):
     logger = _logger(log_file_name)
     logger.debug(args)
 
-    # fitlog
-    fitlog.set_log_dir(args.logdir)
-    fitlog.add_hyper(args)
-    fitlog.add_hyper_in_file(__file__)
+
+    # Initialize W&B
+    run = wandb.init(
+    # Set the project where this run will be logged
+    project="hr_ssl",
+    # Track hyperparameters and run metadata
+    config=vars(args))
+
 
     criterion_cls = nn.CrossEntropyLoss()
     optimizer_cls = torch.optim.Adam(classifier.parameters(), lr=args.lr_cls)
@@ -190,7 +194,7 @@ def setup(args, DEVICE):
     if args.backbone in ['AE', 'CNN_AE']:
         recon = nn.MSELoss()
 
-    return model, optimizers, schedulers, criterion, logger, fitlog, classifier, criterion_cls, optimizer_cls
+    return model, optimizers, schedulers, criterion, logger, classifier, criterion_cls, optimizer_cls
 
 
 def calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=None, nn_replacer=None):
@@ -234,7 +238,7 @@ def calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=N
     return loss
 
 
-def train(train_loaders, val_loader, model, logger, fitlog, DEVICE, optimizers, schedulers, criterion, args):
+def train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args):
     best_model = None
     min_val_loss = 1e8
 
@@ -257,7 +261,8 @@ def train(train_loaders, val_loader, model, logger, fitlog, DEVICE, optimizers, 
                     optimizer.step()
                 if args.framework in ['byol', 'simsiam']:
                     model.update_moving_average()
-        fitlog.add_loss(optimizers[0].param_groups[0]['lr'], name="learning rate", step=epoch)
+        wandb.log({'lr': optimizers[0].param_groups[0]['lr']}, step=epoch)
+        
         for scheduler in schedulers:
             scheduler.step()
 
@@ -267,8 +272,7 @@ def train(train_loaders, val_loader, model, logger, fitlog, DEVICE, optimizers, 
         torch.save({'model_state_dict': model.state_dict()}, model_dir)
 
         logger.debug(f'Train Loss     : {total_loss / n_batches:.4f}')
-
-        fitlog.add_loss(total_loss / n_batches, name="pretrain training loss", step=epoch)
+        wandb.log({'pretrain training loss': total_loss / n_batches}, step=epoch)
 
         if args.cases in ['subject', 'subject_large']:
             with torch.no_grad():
@@ -289,11 +293,12 @@ def train(train_loaders, val_loader, model, logger, fitlog, DEVICE, optimizers, 
                     best_model = copy.deepcopy(model.state_dict())
                     print('update')
                 logger.debug(f'Val Loss     : {total_loss / n_batches:.4f}')
-                fitlog.add_loss(total_loss / n_batches, name="pretrain validation loss", step=epoch)
+                wandb.log({"pretrain validation loss": total_loss / n_batches}, step=epoch)
+                
     return best_model
 
 
-def test(test_loader, best_model, logger, fitlog, DEVICE, criterion, args):
+def test(test_loader, best_model, logger, DEVICE, criterion, args):
     model, _ = setup_model_optm(args, DEVICE, classifier=False)
     model.load_state_dict(best_model)
     with torch.no_grad():
@@ -307,8 +312,8 @@ def test(test_loader, best_model, logger, fitlog, DEVICE, criterion, args):
             loss = calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=recon, nn_replacer=nn_replacer)
             total_loss += loss.item()
         logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}')
-        fitlog.add_best_metric({"dev": {"pretrain test loss": total_loss / n_batches}})
-
+        
+        wandb.log({"pretrain test loss": total_loss / n_batches})
     return model
 
 
