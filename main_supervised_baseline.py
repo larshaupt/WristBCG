@@ -20,8 +20,7 @@ from scipy import signal
 from copy import deepcopy
 import wandb
 from utils import tsne, mds, _logger
-import config
-import pdb
+from config import results_dir, plot_dir, data_dir_Max_processed, data_dir_Apple_processed
 from tqdm import tqdm
 import pandas as pd
 
@@ -40,30 +39,30 @@ parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
 
 # dataset
-parser.add_argument('--dataset', type=str, default='hr_max', choices=['hr_apple','hr_max'], help='name of dataset')
+parser.add_argument('--dataset', type=str, default='max', choices=['apple','max'], help='name of dataset')
 parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
-#parser.add_argument('--len_sw', type=int, default=30, help='length of sliding window')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--split', type=int, default=0, help='split number')
-#parser.add_argument('--split_ratio', type=float, default=0.2, help='split ratio of test/val: train(0.64), val(0.16), test(0.2)')
+parser.add_argument('--hr_min', type=float, default=20, help='minimum heart rate for training')
+parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rate for training')
 
 # backbone model
-parser.add_argument('--backbone', type=str, default='DCL', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer'], help='name of framework')
+parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer', 'CorNET'], help='name of framework')
 
 # log
 parser.add_argument('--logdir', type=str, default='log/', help='log directory')
+parser.add_argument('--wandb_mode', type=str, default='online', choices=['offline', 'online', 'disabled', 'dryrun', 'run'],  help='wandb mode')
 
 # AE & CNN_AE
 parser.add_argument('--lambda1', type=float, default=1.0, help='weight for reconstruction loss when backbone in [AE, CNN_AE]')
 
 
-
-
+corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
 
 # Create directory for saving and plots
 ##################
 global plot_dir_name
-plot_dir_name = config.plot_dir
+plot_dir_name = plot_dir
 
 os.makedirs(plot_dir_name, exist_ok=True)
 
@@ -85,17 +84,18 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
         total = 0
         mae = 0
         mae_train = 0
-        
+        hr_true, hr_pred = [], []
+
         model.train()
         with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training", unit='batch') as tepoch:
             for idx, (sample, target, domain) in enumerate(tepoch): # loop over training batches
-                #pdb.set_trace()
+                
+
                 n_batches += 1
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
                 if args.backbone[-2:] == 'AE':
                     out, x_decoded = model(sample)
                 else:
-                    # TODO: prediction is the same for all samples in epoch, even for different architectures, fix that
                     out, _ = model(sample)
                 loss = criterion(out, target)
                 if args.backbone[-2:] == 'AE':
@@ -107,16 +107,22 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 optimizer.step()
                 predicted = out.data
                 total += target.size(0)
-                mae += torch.abs(predicted - target).sum()
+                mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
+                hr_true.extend(target.cpu().numpy().squeeze())
+                hr_pred.extend(predicted.cpu().numpy().squeeze())
 
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
-        wandb.log({"Train Loss": train_loss / n_batches, "Train MAE": mae_train}, step=epoch)
+        corr_train = np.round(corr(hr_true, hr_pred),3)
+        wandb.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
         logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\n')
     
+    
+        # Validation
+        model_dir = os.path.join(save_dir, args.model_name + '_model.pt')
+
         if val_loader is None:
             best_model = deepcopy(model.state_dict())
-            model_dir = save_dir + args.model_name + '.pt'
             print('Saving models at {} epoch to {}'.format(epoch, model_dir))
             torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
         else:
@@ -127,7 +133,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 total = 0
                 mae_val = 0
                 mae = 0
-                hr_true, hr_pred = [], []
+                hr_true, hr_pred, pids = [], [], []
                 with tqdm(val_loader, desc=f"Validation", unit='batch') as tepoch:
                     for idx, (sample, target, domain) in enumerate(tepoch):
                         n_batches += 1
@@ -142,30 +148,32 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                         val_loss += loss.item()
                         predicted = out.data
                         total += target.size(0)
-                        mae += torch.abs(predicted - target).sum()
+                        mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
                         tepoch.set_postfix(val_loss=loss.item())
                         # Logs some signals for visualization to WandB
-                        hr_true.extend(target[0,...].cpu().tolist())
-                        hr_pred.extend(predicted[0,...].cpu().tolist())
-
+                        hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                        hr_pred.extend(predicted.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                        pids.extend(domain.cpu().numpy().squeeze())
 
                 logging_table = pd.DataFrame({ 
                                     "hr_true": hr_true, 
-                                    "hr_pred": hr_pred
+                                    "hr_pred": hr_pred,
+                                    "pid": pids
                                     })
-                wandb.log({"hr_true_vs_pred": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
+                
+                wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
 
                 mae_val = mae / n_batches
-                wandb.log({"Val Loss": val_loss / n_batches, "Val MAE": mae_val}, step=epoch)
+                corr_val = np.round(corr(hr_true, hr_pred),3)
+                wandb.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
                 logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\n')
 
                 if val_loss <= min_val_loss:
                     min_val_loss = val_loss
                     best_model = deepcopy(model.state_dict())
-                    print('update')
-                    model_dir = save_dir + args.model_name + '.pt'
-                    print('Saving models at {} epoch to {}'.format(epoch, model_dir))
+                    print('Saving models and results at {} epoch to {}'.format(epoch, model_dir))
                     torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
+                    logging_table.to_csv(os.path.join(save_dir, args.model_name + '_predictions_val.csv'), index=False)
 
     return best_model
 
@@ -177,44 +185,44 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
         total_loss = 0
         n_batches = 0
         total = 0
-        correct = 0
+        mae = 0
         feats = None
-        prds = None
-        trgs = None
-        confusion_matrix = torch.zeros(args.n_class, args.n_class)
-        for idx, (sample, target, domain) in enumerate(test_loader):
-            n_batches += 1
-            sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
-            out, features = model(sample)
-            loss = criterion(out, target)
-            total_loss += loss.item()
-            _, predicted = torch.max(out.data, 1)
-            total += target.size(0)
-            correct += (predicted == target).sum()
-            if prds is None:
-                prds = predicted
-                trgs = target
-                feats = features[:, :]
-            else:
-                prds = torch.cat((prds, predicted))
-                trgs = torch.cat((trgs, target))
-                feats = torch.cat((feats, features), 0)
+        hr_true, hr_pred, feats, pids = [], [], [], []
 
-        acc_test = float(correct) * 100.0 / total
-    wandb.log({"Test Loss": total_loss / n_batches, "Test Acc": acc_test})
+        with tqdm(test_loader, desc=f"Test", unit='batch') as tepoch:
+            for idx, (sample, target, domain) in enumerate(tepoch):
+                n_batches += 1
+                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
+                out, features = model(sample)
+                loss = criterion(out, target)
+                total_loss += loss.item()
+                _, predicted = torch.max(out.data, 1)
+                total += target.size(0)
+                mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
+                tepoch.set_postfix(test_loss=loss.item())
+                hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                hr_pred.extend(predicted.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                feats.append(features.cpu().numpy().squeeze())
+                pids.extend(domain.cpu().numpy().squeeze())
 
-    logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest Accuracy     : {acc_test:2.4f}\n')
-    for t, p in zip(trgs.view(-1), prds.view(-1)):
-        confusion_matrix[t.long(), p.long()] += 1
-    logger.debug(confusion_matrix)
-    logger.debug(confusion_matrix.diag() / confusion_matrix.sum(1))
-    wandb.log({"conf_mat": confusion_matrix})
+                
+        logging_table = pd.DataFrame({ 
+                            "hr_true": hr_true, 
+                            "hr_pred": hr_pred,
+                            "pid": pids
+                            })
+        wandb.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+            
+
+    mae_val = mae / n_batches
+    corr_val = np.round(corr(hr_true, hr_pred),3)
+    wandb.log({"Test_Loss": total_loss / n_batches, "Test_MAE": mae_val, "Test_Corr": corr_val})
+
+    logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest MAE     : {mae_val:2.4f}\n')
 
     if plt == True:
-        tsne(feats, trgs, domain=None, save_dir=plot_dir_name + args.model_name + '_tsne.png')
-        mds(feats, trgs, domain=None, save_dir=plot_dir_name + args.model_name + 'mds.png')
-        sns_plot = sns.heatmap(confusion_matrix, cmap='Blues', annot=True)
-        sns_plot.get_figure().savefig(plot_dir_name + args.model_name + '_confmatrix.png')
+        tsne(feats, hr_true, domain=None, save_dir=plot_dir_name + args.model_name + '_tsne.png')
+        mds(feats, hr_true, domain=None, save_dir=plot_dir_name + args.model_name + 'mds.png')
     return total_loss
 
 # Main function
@@ -229,10 +237,13 @@ if __name__ == '__main__':
     # Set the project where this run will be logged
     project="hr_ssl",
     # Track hyperparameters and run metadata
-    config=vars(args))
+    config=vars(args),
+    mode = args.wandb_mode
+    )
 
     # Set device
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
+    DEVICE = torch.device('cpu')
     print('device:', DEVICE, 'dataset:', args.dataset)
 
     # Load data
@@ -240,29 +251,31 @@ if __name__ == '__main__':
 
     # Initialize model
     if args.backbone == 'FCN':
-        model = FCN(n_channels=args.n_feature, n_classes=args.n_class, backbone=False)
+        model = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=False)
     elif args.backbone == 'DCL':
-        model = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=64, kernel_size=5, LSTM_units=128, backbone=False)
+        model = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=128, backbone=False)
     elif args.backbone == 'LSTM':
         model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
     elif args.backbone == 'AE':
-        model = AE(n_channels=args.n_feature, len_sw=args.len_sw, n_classes=args.n_class, outdim=128, backbone=False)
+        model = AE(n_channels=args.n_feature, len_sw=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
-        model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, backbone=False)
+        model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, input_size=args.input_length, backbone=False)
     elif args.backbone == 'Transformer':
-        model = Transformer(n_channels=args.n_feature, len_sw=args.len_sw, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+        model = Transformer(n_channels=args.n_feature, len_sw=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+    elif args.backbone == "CorNET":
+        model = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False)
     else:
         NotImplementedError
 
     model = model.to(DEVICE)
 
     # Set model name
-    args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_sw' + str(args.len_sw)
-
+    # Creates directory for saving results from models from the same split
+    model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) 
     # Create directory for results
-    save_dir = 'results/'
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    save_dir = os.path.join(results_dir, model_name)
+    os.makedirs(save_dir, exist_ok=True)
+    args.model_name = model_name + '_split' + str(args.split) 
 
     # Initialize logger
     if os.path.isdir(args.logdir) == False:
@@ -276,7 +289,7 @@ if __name__ == '__main__':
 
     # Initialize optimizer
     parameters = model.parameters()
-    optimizer = torch.optim.Adam(parameters, args.lr)
+    optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=1e-4)
 
     # Training
     #######################
@@ -286,27 +299,38 @@ if __name__ == '__main__':
 
     best_model = train(args, train_loaders, val_loader, model, DEVICE, optimizer, criterion)
 
+
+    # Testing
+    #######################
+    # Initialize and load test model
     if args.backbone == 'FCN':
-        model_test = FCN(n_channels=args.n_feature, n_classes=args.n_class, backbone=False)
+        model_test = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=False)
     elif args.backbone == 'DCL':
-        model_test = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=64, kernel_size=5, LSTM_units=128, backbone=False)
+        model_test = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=64, kernel_size=5, LSTM_units=128, input_size=args.input_length, backbone=False)
     elif args.backbone == 'LSTM':
         model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
     elif args.backbone == 'AE':
-        model_test = AE(n_channels=args.n_feature, len_sw=args.len_sw, n_classes=args.n_class, outdim=128, backbone=False)
+        model_test = AE(n_channels=args.n_feature, len_sw=args.input_len, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
         model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, backbone=False)
     elif args.backbone == 'Transformer':
-        model_test = Transformer(n_channels=args.n_feature, len_sw=args.len_sw, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+        model_test = Transformer(n_channels=args.n_feature, len_sw=args.input_len, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+    elif args.backbone == "CorNET":
+        model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False)
     else:
         NotImplementedError
 
     # Testing
-    model_test.load_state_dict(best_model)
-    model_test = model_test.to(DEVICE)
-    test_loss = test(test_loader, model_test, DEVICE, criterion, plt=False)
-    test_loss_list.append(test_loss)
+    if len(test_loader) != 0:
+        model_test.load_state_dict(best_model)
+        model_test = model_test.to(DEVICE)
+        test_loss = test(test_loader, model_test, DEVICE, criterion, plt=False)
+        test_loss_list.append(test_loss)
+    else:
+        test_loss_list.append(0)
+        print('No test data. Skip testing...')
 
     training_end = datetime.now()
     training_time = training_end - training_start
     logger.debug(f"Training time is : {training_time}")
+    run.finish()

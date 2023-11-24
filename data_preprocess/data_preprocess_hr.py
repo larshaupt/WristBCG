@@ -12,20 +12,29 @@ import torch
 import pickle as cp
 from torch.utils.data import Dataset, DataLoader
 import config
+import re
 
 NUM_FEATURES = 1
 
 
+
 class data_loader_hr(Dataset):
-    def __init__(self, samples, labels, domains):
+    def __init__(self, samples, labels, domains, hr_norm=True, hr_min=20, hr_max=120):
+
         self.samples = samples
         self.labels = labels
         self.domains = domains
+        self.hr_norm = hr_norm
+
+        self.hr_max = hr_max
+        self.hr_min = hr_min
 
     def __getitem__(self, index):
         #print('index: ', index)
         sample, target, domain = self.samples[index], self.labels[index], self.domains[index]
-
+        
+        if self.hr_norm:
+            target = (target - self.hr_min) / (self.hr_max - self.hr_min)
         return sample, target, domain
 
     def __len__(self):
@@ -66,30 +75,74 @@ def load_data(data_path, split=0):
     (x_val, y_val, d_val) = val
     (x_test, y_test, d_test) = test
 
+    def transform_domain_to_float(domain):
+        domain = np.array([float(re.sub("[^0-9.]", "", el)) if isinstance(el, str) else el for el in domain])
+        return domain
+    
+    d_train = np.array([transform_domain_to_float(el) for el in d_train])
+    d_val = np.array([transform_domain_to_float(el) for el in d_val])
+    d_test = np.array([transform_domain_to_float(el) for el in d_test])
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
+def load_data_no_labels(data_path, split=0):
+    # Load data without labels
+    # Used for capture24 dataset
+    # Substitutes labels with zeros
+
+    split_path = os.path.join(data_path, 'split_'+str(split))
+    with open(os.path.join(split_path, 'train.pickle'), 'rb') as f:
+        train = cp.load(f)
+    with open(os.path.join(split_path, 'test.pickle'), 'rb') as f:
+        test = cp.load(f)
+    with open(os.path.join(split_path, 'val.pickle'), 'rb') as f:
+        val = cp.load(f)
+
+    (x_train, d_train) = train
+    (x_val, d_val) = val
+    (x_test, d_test) = test
+
+    y_train = np.ones((x_train.shape[0],1))
+    y_val = np.ones((x_val.shape[0],1))
+    y_test = np.ones((x_test.shape[0],1))
+
+    def transform_domain_to_float(domain):
+        domain = np.array([float(re.sub("[^0-9.]", "", el)) if isinstance(el, str) else el for el in domain])
+        return domain
+    
+    d_train = np.array([transform_domain_to_float(el) for el in d_train])
+    d_val = np.array([transform_domain_to_float(el) for el in d_val])
+    d_test = np.array([transform_domain_to_float(el) for el in d_test])
+
+    return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
 def prep_hr(args):
-    if args.dataset == 'hr_max':
+    if args.dataset == 'max':
         data_path = config.data_dir_Max_processed
-    elif args.dataset == 'hr_apple':
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=args.split)
+    elif args.dataset == 'apple':
         data_path = config.data_dir_Apple_processed
-    x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=args.split)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=args.split)
+    elif args.dataset == 'capture24':
+        data_path = config.data_dir_Capture24_processed
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=args.split)
+    
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
 
-    train_set = data_loader_hr(x_train, y_train, d_train)
+    train_set = data_loader_hr(x_train, y_train, d_train, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
     train_sampler = torch.utils.data.sampler.SequentialSampler(train_set)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, sampler=train_sampler, num_workers=args.num_workers, pin_memory=True)
 
-    test_set = data_loader_hr(x_test, y_test, d_test)
+    test_set = data_loader_hr(x_test, y_test, d_test, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
-    print('train_loader batch: ', len(train_loader), 'test_loader batch: ', len(test_loader))
 
-    val_set = data_loader_hr(x_val, y_val, d_val)
+    val_set = data_loader_hr(x_val, y_val, d_val, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
-    print('val_loader batch: ', len(val_loader))
+
+    print(f"Number of batches in train_loader: {len(train_loader)}")
+    print(f"Number of batches in val_loader: {len(val_loader)}")
+    print(f"Number of batches in test_loader: {len(test_loader)}")
 
     return train_loader, val_loader, test_loader
 

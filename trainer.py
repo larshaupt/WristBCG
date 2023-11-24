@@ -15,12 +15,13 @@ from sklearn.metrics import f1_score
 import seaborn as sns
 import wandb
 from copy import deepcopy
+from tqdm import tqdm
+import config
 
 # create directory for saving models and plots
 global model_dir_name
-model_dir_name = 'results'
-if not os.path.exists(model_dir_name):
-    os.makedirs(model_dir_name)
+model_dir_name = config.results_dir
+
 global plot_dir_name
 plot_dir_name = 'plot'
 if not os.path.exists(plot_dir_name):
@@ -38,12 +39,21 @@ def setup_dataloaders(args):
                                                                                 device=args.device,
                                                                                 train_user=source_domain,
                                                                                 test_user=args.target_domain)
-    elif args.dataset == 'hr_max' or args.dataset == 'hr_apple':
+    elif args.dataset == 'max' or args.dataset == 'apple' or args.dataset == 'capture24':
         args.n_feature = 3
         args.len_sw = 100
         args.n_class = 1
+        
+        if args.dataset == 'max':
+            args.input_length = 1000
+        elif args.dataset == "apple":
+            args.input_length = 500
+        else: # capture24
+            args.input_length = 1000
+
         train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args)
     
+   
     else:
         NotImplementedError(args.dataset)
 
@@ -120,11 +130,11 @@ def setup_model_optm(args, DEVICE, classifier=True):
 
 def delete_files(args):
     for epoch in range(args.n_epoch):
-        model_dir = model_dir_name + '/pretrain_' + args.model_name + str(epoch) + '.pt'
+        model_dir = os.path.join(model_dir_name, 'pretrain_' + args.model_name + str(epoch) + '.pt')
         if os.path.isfile(model_dir):
             os.remove(model_dir)
 
-        cls_dir = model_dir_name + '/lincls_' + args.model_name + str(epoch) + '.pt'
+        cls_dir = os.path.join(model_dir_name, 'lincls_' + args.model_name + str(epoch) + '.pt')
         if os.path.isfile(cls_dir):
             os.remove(cls_dir)
 
@@ -238,17 +248,20 @@ def calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=N
     return loss
 
 
-def train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args):
+def train(train_loader, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args):
     best_model = None
     min_val_loss = 1e8
+    num_epochs = args.n_epoch
 
     for epoch in range(args.n_epoch):
         logger.debug(f'\nEpoch : {epoch}')
         total_loss = 0
         n_batches = 0
         model.train()
-        for i, train_loader in enumerate(train_loaders):
-            for idx, (sample, target, domain) in enumerate(train_loader):
+
+        with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training", unit='batch') as tepoch:
+            for idx, (sample, target, domain) in enumerate(tepoch):
+            
                 for optimizer in optimizers:
                     optimizer.zero_grad()
                 if sample.size(0) != args.batch_size:
@@ -267,14 +280,14 @@ def train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedule
             scheduler.step()
 
         # save model
-        model_dir = model_dir_name + '/pretrain_' + args.model_name + str(epoch) + '.pt'
+        model_dir = os.path.join(model_dir_name, 'pretrain_' + args.model_name + str(epoch) + '.pt')
         print('Saving model at {} epoch to {}'.format(epoch, model_dir))
         torch.save({'model_state_dict': model.state_dict()}, model_dir)
 
         logger.debug(f'Train Loss     : {total_loss / n_batches:.4f}')
-        wandb.log({'pretrain training loss': total_loss / n_batches}, step=epoch)
+        wandb.log({'pretrain_training_loss': total_loss / n_batches}, step=epoch)
 
-        if args.cases in ['subject', 'subject_large']:
+        if val_loader is None:
             with torch.no_grad():
                 best_model = copy.deepcopy(model.state_dict())
         else:
@@ -282,18 +295,19 @@ def train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedule
                 model.eval()
                 total_loss = 0
                 n_batches = 0
-                for idx, (sample, target, domain) in enumerate(val_loader):
-                    if sample.size(0) != args.batch_size:
-                        continue
-                    n_batches += 1
-                    loss = calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=recon, nn_replacer=nn_replacer)
-                    total_loss += loss.item()
+                with tqdm(val_loader, desc=f"Validation", unit='batch') as tepoch:
+                    for idx, (sample, target, domain) in enumerate(tepoch):
+                        if sample.size(0) != args.batch_size:
+                            continue
+                        n_batches += 1
+                        loss = calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=recon, nn_replacer=nn_replacer)
+                        total_loss += loss.item()
                 if total_loss <= min_val_loss:
                     min_val_loss = total_loss
                     best_model = copy.deepcopy(model.state_dict())
                     print('update')
                 logger.debug(f'Val Loss     : {total_loss / n_batches:.4f}')
-                wandb.log({"pretrain validation loss": total_loss / n_batches}, step=epoch)
+                wandb.log({"pretrain_validation_loss": total_loss / n_batches}, step=epoch)
                 
     return best_model
 
@@ -305,15 +319,15 @@ def test(test_loader, best_model, logger, DEVICE, criterion, args):
         model.eval()
         total_loss = 0
         n_batches = 0
-        for idx, (sample, target, domain) in enumerate(test_loader):
-            if sample.size(0) != args.batch_size:
-                continue
-            n_batches += 1
-            loss = calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=recon, nn_replacer=nn_replacer)
-            total_loss += loss.item()
+        with tqdm(test_loader, desc=f"Test", unit='batch') as tepoch:
+            for idx, (sample, target, domain) in enumerate(tepoch):
+                if sample.size(0) != args.batch_size:
+                    continue
+                n_batches += 1
+                loss = calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=recon, nn_replacer=nn_replacer)
+                total_loss += loss.item()
         logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}')
-        
-        wandb.log({"pretrain test loss": total_loss / n_batches})
+        wandb.log({"pretrain_test_loss": total_loss / n_batches})
     return model
 
 
@@ -366,7 +380,7 @@ def train_lincls(train_loaders, val_loader, trained_backbone, classifier, logger
                 optimizer.step()
 
         # save model
-        model_dir = model_dir_name + '/lincls_' + args.model_name + str(epoch) + '.pt'
+        model_dir = os.path.join(model_dir_name, 'lincls_' + args.model_name + str(epoch) + '.pt')
         print('Saving model at {} epoch to {}'.format(epoch, model_dir))
         torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': classifier.state_dict()}, model_dir)
 
@@ -416,20 +430,21 @@ def test_lincls(test_loader, trained_backbone, best_lincls, logger, fitlog, DEVI
     preds = np.array([])
     with torch.no_grad():
         classifier.eval()
-        for idx, (sample, target, domain) in enumerate(test_loader):
-            sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
-            loss, predicted, feat = calculate_lincls_output(sample, target, trained_backbone, classifier, criterion)
-            total_loss += loss.item()
-            if feats is None:
-                feats = feat
-            else:
-                feats = torch.cat((feats, feat), 0)
-            trgs = np.append(trgs, target.data.cpu().numpy())
-            preds = np.append(preds, predicted.data.cpu().numpy())
-            for t, p in zip(target.view(-1), predicted.view(-1)):
-                confusion_matrix[t.long(), p.long()] += 1
-            total += target.size(0)
-            correct += (predicted == target).sum()
+        with tqdm(test_loader, desc=f"Test Lincls", unit='batch') as tepoch:
+            for idx, (sample, target, domain) in enumerate(tepoch):
+                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
+                loss, predicted, feat = calculate_lincls_output(sample, target, trained_backbone, classifier, criterion)
+                total_loss += loss.item()
+                if feats is None:
+                    feats = feat
+                else:
+                    feats = torch.cat((feats, feat), 0)
+                trgs = np.append(trgs, target.data.cpu().numpy())
+                preds = np.append(preds, predicted.data.cpu().numpy())
+                for t, p in zip(target.view(-1), predicted.view(-1)):
+                    confusion_matrix[t.long(), p.long()] += 1
+                total += target.size(0)
+                correct += (predicted == target).sum()
         acc_test = float(correct) * 100.0 / total
 
         miF = f1_score(trgs, preds, average='micro') * 100

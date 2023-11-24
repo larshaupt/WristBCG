@@ -4,31 +4,39 @@ from .attention import *
 from .MMB import *
 
 class FCN(nn.Module):
-    def __init__(self, n_channels, n_classes, out_channels=128, backbone=True):
+    def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
         super(FCN, self).__init__()
 
         self.backbone = backbone
 
+        # vector size after a convolutional layer is given by:
+        # (input_size - kernel_size + 2 * padding) / stride + 1
+
+        # vector size after pooling layer is given by:
+        # (input_size - kernel_size + 2 * padding) / stride + 1
+        
         self.conv_block1 = nn.Sequential(nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(32),
                                          nn.ReLU(),
                                          nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
                                          nn.Dropout(0.35))
+        out_len = (input_size - 8 + 2 * 4) // 1 + 1
+        out_len = (out_len - 2 + 2 * 1) // 2 + 1
         self.conv_block2 = nn.Sequential(nn.Conv1d(32, 64, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(64),
                                          nn.ReLU(),
                                          nn.MaxPool1d(kernel_size=2, stride=2, padding=1))
+        out_len = (out_len - 8 + 2 * 4) // 1 + 1
+        out_len = (out_len - 2 + 2 * 1) // 2 + 1
         self.conv_block3 = nn.Sequential(nn.Conv1d(64, out_channels, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(out_channels),
                                          nn.ReLU(),
                                          nn.MaxPool1d(kernel_size=2, stride=2, padding=1))
+        out_len = (out_len - 8 + 2 * 4) // 1 + 1
+        out_len = (out_len - 2 + 2 * 1) // 2 + 1
 
-        if n_channels == 9: # ucihar
-            self.out_len = 18
-        elif n_channels == 3: # shar
-            self.out_len = 21
-        if n_channels == 6: # hhar
-            self.out_len = 15
+        self.out_len = int(out_len)
+        
 
         self.out_channels = out_channels
         self.out_dim = self.out_len * self.out_channels
@@ -50,10 +58,71 @@ class FCN(nn.Module):
             return logits, x
 
 
-class DeepConvLSTM(nn.Module):
-    def __init__(self, n_channels, n_classes, conv_kernels=64, kernel_size=5, LSTM_units=128, backbone=True):
-        super(DeepConvLSTM, self).__init__()
+class CorNET(nn.Module):
+    # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
+    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True):
+        super(CorNET, self).__init__()
+        # vector size after a convolutional layer is given by:
+        # (input_size - kernel_size + 2 * padding) / stride + 1
+        
+        self.activation = nn.ELU()
+        self.backbone = backbone
+        self.dropout = nn.Dropout(0.1)
+        self.conv1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.maxpool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+        out_len = (input_size - kernel_size + 2 * 0) // 1 + 1
+        out_len = (out_len - 4 + 2 * 0) // 4 + 1
+        self.conv2 = nn.Sequential(nn.Conv1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.maxpool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+                                         
+        out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
+        self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
+        # should be 50 with default parameters
 
+        self.lstm = nn.LSTM(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2)
+
+        self.out_dim = LSTM_units
+
+        if backbone == False:
+            self.classifier = nn.Linear(LSTM_units, n_classes) 
+
+    def forward(self, x):
+        #self.lstm.flatten_parameters()
+        x = x.permute(0, 2, 1)
+        x = self.conv1(x)
+        x = self.maxpool1(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = self.maxpool2(x)
+        x = self.dropout(x)
+        x = x.permute(2, 0, 1)
+        # shape is (L, N, H_in)
+        # L - seq_len, N - batch_size, H_in - input_size
+        # L = 19
+        # N = 64
+        # H_in = 32
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+
+
+        x, h = self.lstm(x)
+        x = x[-1, :, :]
+
+        if self.backbone:
+            return None, x
+        else:
+            out = self.classifier(x)
+            return out, x
+
+
+class DeepConvLSTM(nn.Module):
+    def __init__(self, n_channels, n_classes, conv_kernels=64, kernel_size=5, LSTM_units=128, input_size:int=500, backbone=True):
+        super(DeepConvLSTM, self).__init__()
         self.backbone = backbone
 
         self.conv1 = nn.Conv2d(1, conv_kernels, (kernel_size, 1))
@@ -83,7 +152,7 @@ class DeepConvLSTM(nn.Module):
         x = x.reshape(x.shape[0], x.shape[1], -1)
 
         x = self.dropout(x)
-
+        
         x, h = self.lstm(x)
         x = x[-1, :, :]
 
@@ -154,58 +223,64 @@ class AE(nn.Module):
             return out, x_decoded
 
 class CNN_AE(nn.Module):
-    def __init__(self, n_channels, n_classes, out_channels=128, backbone=True):
+    def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
         super(CNN_AE, self).__init__()
 
         self.backbone = backbone
         self.n_channels = n_channels
+
+        # vector size after a convolutional layer is given by:
+        # (input_size - kernel_size + 2 * padding) / stride + 1
 
         self.e_conv1 = nn.Sequential(nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(32),
                                          nn.ReLU())
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
         self.dropout = nn.Dropout(0.35)
+        out_size = (input_size - 8 + 2 * 4) // 1 + 1
+        out_size = (out_size - 2 + 2 * 1) // 2 + 1
 
         self.e_conv2 = nn.Sequential(nn.Conv1d(32, 64, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(64),
                                          nn.ReLU())
         self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
+        out_size = (out_size - 8 + 2 * 4) // 1 + 1
+        out_size = (out_size - 2 + 2 * 1) // 2 + 1
 
         self.e_conv3 = nn.Sequential(nn.Conv1d(64, out_channels, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(out_channels),
                                          nn.ReLU())
         self.pool3 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
+        out_size = (out_size - 8 + 2 * 4) // 1 + 1
+        out_size = (out_size - 2 + 2 * 1) // 2 + 1
+        self.out_dim = out_size * out_channels
 
         self.unpool1 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
         self.d_conv1 = nn.Sequential(nn.ConvTranspose1d(out_channels, 64, kernel_size=8, stride=1, bias=False, padding=4),
                                      nn.BatchNorm1d(64),
                                      nn.ReLU())
+        # Transposed convolution and unpool
+        out_size = (out_size - 1) * 2 - 2 * 1 + 2
+        out_size = (out_size - 1) * 1 - 2 * 4 + 8
+        self.lin1 = nn.Linear(out_size, out_size)
 
-        if n_channels == 9: # ucihar
-            self.lin1 = nn.Linear(33, 34)
-        elif n_channels == 6: # hhar
-            self.lin1 = nn.Identity()
-        elif n_channels == 3: # shar
-            self.lin1 = nn.Linear(39, 40)
 
         self.unpool2 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
         self.d_conv2 = nn.Sequential(nn.ConvTranspose1d(64, 32, kernel_size=8, stride=1, bias=False, padding=4),
                                      nn.BatchNorm1d(32),
                                      nn.ReLU())
+        out_size = (out_size - 1) * 2 - 2 * 1 + 2
+        out_size = (out_size - 1) * 1 - 2 * 4 + 8
 
         self.unpool3 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
         self.d_conv3 = nn.Sequential(nn.ConvTranspose1d(32, n_channels, kernel_size=8, stride=1, bias=False, padding=4),
                                      nn.BatchNorm1d(n_channels),
                                      nn.ReLU())
+        out_size = (out_size - 1) * 2 - 2 * 1 + 2
+        out_size = (out_size - 1) * 1 - 2 * 4 + 8
+        self.lin2 = nn.Linear(out_size, input_size)
+        out_size = input_size
 
-        if n_channels == 9: # ucihar
-            self.lin2 = nn.Linear(127, 128)
-            self.out_dim = 18 * out_channels
-        elif n_channels == 6:  # hhar
-            self.lin2 = nn.Linear(99, 100)
-            self.out_dim = 15 * out_channels
-        elif n_channels == 3: # shar
-            self.out_dim = 21 * out_channels
 
         if backbone == False:
             self.classifier = nn.Linear(self.out_dim, n_classes)
@@ -219,16 +294,11 @@ class CNN_AE(nn.Module):
         x = self.d_conv1(self.unpool1(x_encoded, indice3))
         x = self.lin1(x)
         x = self.d_conv2(self.unpool2(x, indice2))
-        x = self.d_conv3(self.unpool1(x, indice1))
-        if self.n_channels == 9: # ucihar
-            x_decoded = self.lin2(x)
-        elif self.n_channels == 6 : # hhar
-            x_decoded =self.lin2(x)
-        elif self.n_channels == 3: # shar
-            x_decoded = x
+        x = self.d_conv3(self.unpool3(x, indice1))
+        x_decoded = self.lin2(x)
         x_decoded = x_decoded.permute(0, 2, 1)
         x_encoded = x_encoded.reshape(x_encoded.shape[0], -1)
-
+        
         if self.backbone:
             return x_decoded, x_encoded
         else:
