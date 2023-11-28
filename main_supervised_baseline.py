@@ -288,7 +288,7 @@ if __name__ == '__main__':
 
     # Initialize optimizer
     parameters = model.parameters()
-    optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.parser)
+    optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.weight_decay)
 
     # Training
     #######################
