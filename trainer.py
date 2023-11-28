@@ -465,6 +465,8 @@ def train_lincls(train_loader, val_loader, trained_backbone, classifier, logger 
                     })
                 
                 wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
+                figure = plot_true_pred(hr_true, hr_pred)
+                wandb.log({"true_pred_val": figure}, step=epoch)
                 logger.debug(f'epoch val loss     : {val_loss:.4f}, val mae     : {mae_val:.4f}, val corr     : {corr_val:.4f}\n')
                 wandb.log({'Val_Loss': val_loss, 'Val_MAE': mae_val, 'Val_Corr': corr_val}, step=epoch)
 
@@ -510,6 +512,8 @@ def test_lincls(test_loader, trained_backbone, best_lincls, logger, DEVICE, crit
                     "pid": pids
                     }) 
         wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+        figure = plot_true_pred(hr_true, hr_pred)
+        wandb.log({"true_pred_test": figure})
         mae_test = mae / total
         corr_val = np.round(corr(hr_true, hr_pred),3)
         wandb.log({'Test_Loss': total_loss, 'Test_MAE': mae_test, "Test_Corr": corr_val})

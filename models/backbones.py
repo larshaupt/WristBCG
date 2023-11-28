@@ -231,12 +231,18 @@ class CNN_AE(nn.Module):
 
         # vector size after a convolutional layer is given by:
         # (input_size - kernel_size + 2 * padding) / stride + 1
+        # latent dimension = (input_dim + 9)/4
+
+        self.padding_length = (8 -(input_size + 21) % 8) % 8
+        input_size += self.padding_length
+        self.padding = nn.ReflectionPad1d((0, self.padding_length))
 
         self.e_conv1 = nn.Sequential(nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(32),
                                          nn.ReLU())
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
         self.dropout = nn.Dropout(0.35)
+        
         out_size = (input_size - 8 + 2 * 4) // 1 + 1
         out_size = (out_size - 2 + 2 * 1) // 2 + 1
 
@@ -262,7 +268,8 @@ class CNN_AE(nn.Module):
         # Transposed convolution and unpool
         out_size = (out_size - 1) * 2 - 2 * 1 + 2
         out_size = (out_size - 1) * 1 - 2 * 4 + 8
-        self.lin1 = nn.Linear(out_size, out_size)
+        #self.lin1 = nn.Linear(out_size, out_size)
+        self.lin1 = nn.Identity()
 
 
         self.unpool2 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
@@ -278,7 +285,8 @@ class CNN_AE(nn.Module):
                                      nn.ReLU())
         out_size = (out_size - 1) * 2 - 2 * 1 + 2
         out_size = (out_size - 1) * 1 - 2 * 4 + 8
-        self.lin2 = nn.Linear(out_size, input_size)
+        #self.lin2 = nn.Linear(out_size, input_size)
+        self.lin2 = nn.Identity()
         out_size = input_size
 
 
@@ -287,6 +295,7 @@ class CNN_AE(nn.Module):
 
     def forward(self, x):
         x = x.permute(0, 2, 1)
+        x = self.padding(x)
         x, indice1 = self.pool1(self.e_conv1(x))
         x = self.dropout(x)
         x, indice2 = self.pool2(self.e_conv2(x))
@@ -295,6 +304,7 @@ class CNN_AE(nn.Module):
         x = self.lin1(x)
         x = self.d_conv2(self.unpool2(x, indice2))
         x = self.d_conv3(self.unpool3(x, indice1))
+        x = x[:,:, :-self.padding_length]
         x_decoded = self.lin2(x)
         x_decoded = x_decoded.permute(0, 2, 1)
         x_encoded = x_encoded.reshape(x_encoded.shape[0], -1)

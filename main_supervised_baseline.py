@@ -58,7 +58,7 @@ parser.add_argument('--wandb_mode', type=str, default='online', choices=['offlin
 parser.add_argument('--lambda1', type=float, default=1.0, help='weight for reconstruction loss when backbone in [AE, CNN_AE]')
 
 
-corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
+corr = lambda a, b: np.round(pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1],2)
 
 # Create directory for saving and plots
 ##################
@@ -112,7 +112,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
 
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
-        corr_train = np.round(corr(hr_true, hr_pred),3)
+        corr_train = corr(hr_true, hr_pred)
         wandb.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
         logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\n')
     
@@ -161,9 +161,11 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                                     })
                 
                 wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
+                figure = plot_true_pred(hr_true, hr_pred)
+                wandb.log({"true_pred_val": figure}, step=epoch)
 
                 mae_val = mae / n_batches
-                corr_val = np.round(corr(hr_true, hr_pred),3)
+                corr_val = corr(hr_true, hr_pred)
                 wandb.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
                 logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\n')
 
@@ -211,10 +213,13 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                             "pid": pids
                             })
         wandb.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+        figure = plot_true_pred(hr_true, hr_pred)
+        wandb.log({"true_pred_test": figure})
+        
             
 
     mae_val = mae / n_batches
-    corr_val = np.round(corr(hr_true, hr_pred),3)
+    corr_val = corr(hr_true, hr_pred)
     wandb.log({"Test_Loss": total_loss / n_batches, "Test_MAE": mae_val, "Test_Corr": corr_val})
 
     logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest MAE     : {mae_val:2.4f}\n')
@@ -223,6 +228,25 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
         tsne(feats, hr_true, domain=None, save_dir=plot_dir_name + args.model_name + '_tsne.png')
         mds(feats, hr_true, domain=None, save_dir=plot_dir_name + args.model_name + 'mds.png')
     return total_loss
+
+def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
+    figure = plt.figure(figsize=(8, 8))
+    hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
+    mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
+    correlation_coefficient = corr(hr_true, hr_pred)
+
+    plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae}, Corr: {correlation_coefficient}")
+
+    plt.plot(x_lim, y_lim, color='k', linestyle='-', linewidth=2)
+    plt.xlim(*x_lim)
+    plt.ylim(*y_lim)
+    plt.xlabel('True HR (bpm)')
+    plt.ylabel('Predicted HR (bpm)')
+    plt.legend()
+    return figure
+    
+
+
 
 # Main function
 #######################
