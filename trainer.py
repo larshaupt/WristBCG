@@ -16,7 +16,9 @@ import seaborn as sns
 import wandb
 from copy import deepcopy
 from tqdm import tqdm
+import pandas as pd
 import config
+import pdb
 
 # create directory for saving models and plots
 global model_dir_name
@@ -27,9 +29,18 @@ plot_dir_name = 'plot'
 if not os.path.exists(plot_dir_name):
     os.makedirs(plot_dir_name)
 
+corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
 
-def setup_dataloaders(args):
-    if args.dataset == 'hhar':
+def setup_dataloaders(args, pretrain=False):
+
+    if pretrain:
+        dataset = args.pretrain_dataset
+        split = 0 # pretrains network always with split 0
+    else: # normal dataset, not pretraining
+        dataset = args.dataset
+        split = args.split
+
+    if dataset == 'hhar':
         args.n_feature = 6
         args.len_sw = 100
         args.n_class = 6
@@ -39,23 +50,28 @@ def setup_dataloaders(args):
                                                                                 device=args.device,
                                                                                 train_user=source_domain,
                                                                                 test_user=args.target_domain)
-    elif args.dataset == 'max' or args.dataset == 'apple' or args.dataset == 'capture24':
+    elif dataset == 'max' or dataset == 'apple' or dataset == 'capture24' or dataset == 'm2sleep':
         args.n_feature = 3
-        args.len_sw = 100
         args.n_class = 1
         
-        if args.dataset == 'max':
+        if dataset == 'max':
             args.input_length = 1000
-        elif args.dataset == "apple":
+            args.len_sw = 1000
+        elif dataset == "apple":
             args.input_length = 500
+            args.len_sw = 500
+        elif dataset == "m2sleep":
+            args.input_length = 320
+            args.len_sw = 320
         else: # capture24
             args.input_length = 1000
+            args.len_sw = 1000
 
-        train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args)
+        train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split)
     
    
     else:
-        NotImplementedError(args.dataset)
+        NotImplementedError(dataset)
 
     return train_loaders, val_loader, test_loader
 
@@ -73,6 +89,7 @@ def setup_linclf(args, DEVICE, bb_dim):
 
 
 def setup_model_optm(args, DEVICE, classifier=True):
+
     # set up backbone network
     if args.backbone == 'FCN':
         backbone = FCN(n_channels=args.n_feature, n_classes=args.n_class, backbone=True)
@@ -86,6 +103,8 @@ def setup_model_optm(args, DEVICE, classifier=True):
         backbone = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, backbone=True)
     elif args.backbone == 'Transformer':
         backbone = Transformer(n_channels=args.n_feature, len_sw=args.len_sw, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True)
+    elif args.backbone == 'CorNET':
+        backbone = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=True)
     else:
         NotImplementedError
 
@@ -166,7 +185,7 @@ def setup(args, DEVICE):
         else:
             criterion = NTXentLoss(DEVICE, args.batch_size, temperature=0.1)
 
-    args.model_name = 'try_scheduler_' + args.framework + '_pretrain_' + args.dataset + '_eps' + str(args.n_epoch) + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) \
+    args.model_name = 'try_scheduler_' + args.framework + '_backbone_' + args.backbone +'_pretrain_' + args.pretrain_dataset + '_eps' + str(args.n_epoch) + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) \
                       + '_aug1' + args.aug1 + '_aug2' + args.aug2 + '_dim-pdim' + str(args.p) + '-' + str(args.phid) \
                       + '_EMA' + str(args.EMA) + '_criterion_' + args.criterion + '_lambda1_' + str(args.lambda1) + '_lambda2_' + str(args.lambda2) + '_tempunit_' + args.temp_unit
 
@@ -183,10 +202,11 @@ def setup(args, DEVICE):
     # Set the project where this run will be logged
     project="hr_ssl",
     # Track hyperparameters and run metadata
-    config=vars(args))
+    config=vars(args),
+    mode = args.wandb_mode)
 
 
-    criterion_cls = nn.CrossEntropyLoss()
+    criterion_cls = nn.MSELoss()
     optimizer_cls = torch.optim.Adam(classifier.parameters(), lr=args.lr_cls)
 
     schedulers = []
@@ -280,9 +300,9 @@ def train(train_loader, val_loader, model, logger, DEVICE, optimizers, scheduler
             scheduler.step()
 
         # save model
-        model_dir = os.path.join(model_dir_name, 'pretrain_' + args.model_name + str(epoch) + '.pt')
-        print('Saving model at {} epoch to {}'.format(epoch, model_dir))
-        torch.save({'model_state_dict': model.state_dict()}, model_dir)
+        #model_dir = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name + str(epoch) + '.pt')
+        #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
+        #torch.save({'model_state_dict': model.state_dict()}, model_dir)
 
         logger.debug(f'Train Loss     : {total_loss / n_batches:.4f}')
         wandb.log({'pretrain_training_loss': total_loss / n_batches}, step=epoch)
@@ -305,12 +325,29 @@ def train(train_loader, val_loader, model, logger, DEVICE, optimizers, scheduler
                 if total_loss <= min_val_loss:
                     min_val_loss = total_loss
                     best_model = copy.deepcopy(model.state_dict())
-                    print('update')
+                    model_dir = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name  + "_bestmodel" + '.pt')
+                    print('update: Saving model at {} epoch to {}'.format(epoch, model_dir))
+                    torch.save({'model_state_dict': model.state_dict()}, model_dir)
+                    
                 logger.debug(f'Val Loss     : {total_loss / n_batches:.4f}')
                 wandb.log({"pretrain_validation_loss": total_loss / n_batches}, step=epoch)
                 
     return best_model
 
+
+def load_best_model(args, epoch=None):
+    if epoch is None:
+        model_dir = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name + "_bestmodel" + '.pt')
+    else:
+        model_dir = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name + str(epoch) + '.pt')
+
+    if os.path.exists(model_dir) == False:
+        print("No model found at {}".format(model_dir))
+        return None
+    
+    print('Loading model from {}'.format(model_dir))
+    best_model = torch.load(model_dir)["model_state_dict"]
+    return best_model
 
 def test(test_loader, best_model, logger, DEVICE, criterion, args):
     model, _ = setup_model_optm(args, DEVICE, classifier=False)
@@ -351,11 +388,12 @@ def calculate_lincls_output(sample, target, trained_backbone, classifier, criter
         feat = feat.reshape(feat.shape[0], -1)
     output = classifier(feat)
     loss = criterion(output, target)
-    _, predicted = torch.max(output.data, 1)
+    predicted = output.data # regression
+    #_, predicted = torch.max(output.data, 1)
     return loss, predicted, feat
 
 
-def train_lincls(train_loaders, val_loader, trained_backbone, classifier, logger, fitlog, DEVICE, optimizer, criterion, args):
+def train_lincls(train_loader, val_loader, trained_backbone, classifier, logger , DEVICE, optimizer, criterion, args):
     best_lincls = None
     min_val_loss = 1e8
 
@@ -365,73 +403,95 @@ def train_lincls(train_loaders, val_loader, trained_backbone, classifier, logger
         classifier.train()
         logger.debug(f'\nEpoch : {epoch}')
         total_loss = 0
+        mae = 0
         total = 0
-        correct = 0
-        for i, train_loader in enumerate(train_loaders):
-            for idx, (sample, target, domain) in enumerate(train_loader):
-                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
+        hr_true, hr_pred = [], []
+        with tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.n_epoch} - Training Lincls", unit='batch') as tepoch:
+            for idx, (sample, target, domain) in enumerate(tepoch):
+                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
                 loss, predicted, _ = calculate_lincls_output(sample, target, trained_backbone, classifier, criterion)
                 total_loss += loss.item()
-                total += target.size(0)
-                correct += (predicted == target).sum()
-
+                mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
+                total += 1
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                hr_pred.extend(predicted.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+
 
         # save model
-        model_dir = os.path.join(model_dir_name, 'lincls_' + args.model_name + str(epoch) + '.pt')
-        print('Saving model at {} epoch to {}'.format(epoch, model_dir))
-        torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': classifier.state_dict()}, model_dir)
+        mae_train = mae / total
+        corr_train = np.round(corr(hr_true, hr_pred),3)
+        model_dir = os.path.join(args.model_dir_name, 'lincls_' + args.model_name + "_split" + str(args.split) + "_" + str(epoch) + '.pt')
+        #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
+        #torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': classifier.state_dict()}, model_dir)
 
-        acc_train = float(correct) * 100.0 / total
-        logger.debug(f'epoch train loss     : {total_loss:.4f}, train acc     : {acc_train:.4f}')
-        fitlog.add_loss(total_loss, name="Train Loss", step=epoch)
-        fitlog.add_metric({"dev": {"Train Acc": acc_train}}, step=epoch)
+
+        logger.debug(f'epoch train loss     : {total_loss:.4f}\t | \tepoch train MAE    : {mae_train:2.4f}\n')
+        wandb.log({'Train_Loss': total_loss, 'Train_MAE': mae_train, 'Train_Corr': corr_train}, step=epoch)
+
 
         if args.scheduler:
             scheduler.step()
 
-        if args.cases in ['subject', 'subject_large']:
+        if val_loader is None:
             with torch.no_grad():
                 best_lincls = copy.deepcopy(classifier.state_dict())
         else:
             with torch.no_grad():
                 classifier.eval()
-                total_loss = 0
+                val_loss = 0
                 total = 0
-                correct = 0
-                for idx, (sample, target, domain) in enumerate(val_loader):
-                    sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
-                    loss, predicted, _ = calculate_lincls_output(sample, target, trained_backbone, classifier, criterion)
-                    total_loss += loss.item()
-                    total += target.size(0)
-                    correct += (predicted == target).sum()
-                acc_val = float(correct) * 100.0 / total
-                if total_loss <= min_val_loss:
-                    min_val_loss = total_loss
+                mae = 0
+                hr_true, hr_pred, pids = [], [], []
+                with tqdm(val_loader, desc=f"Validation Lincls", unit='batch') as tepoch:
+                    for idx, (sample, target, domain) in enumerate(tepoch):
+                        total += 1
+                        sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float()
+                        loss, predicted, _ = calculate_lincls_output(sample, target, trained_backbone, classifier, criterion)
+                        total_loss += loss.item()
+                        mae = torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
+                        hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                        hr_pred.extend(predicted.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                        pids.extend(domain.cpu().numpy().squeeze())
+                mae_val = mae / total
+                corr_val = np.round(corr(hr_true, hr_pred),3)
+
+                logging_table = pd.DataFrame({ 
+                    "hr_true": hr_true, 
+                    "hr_pred": hr_pred,
+                    "pid": pids
+                    })
+                
+                wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
+                logger.debug(f'epoch val loss     : {val_loss:.4f}, val mae     : {mae_val:.4f}, val corr     : {corr_val:.4f}\n')
+                wandb.log({'Val_Loss': val_loss, 'Val_MAE': mae_val, 'Val_Corr': corr_val}, step=epoch)
+
+                if val_loss <= min_val_loss:
+                    min_val_loss = val_loss
                     best_lincls = copy.deepcopy(classifier.state_dict())
-                    print('update')
-                logger.debug(f'epoch val loss     : {total_loss:.4f}, val acc     : {acc_val:.4f}')
-                fitlog.add_loss(total_loss, name="Val Loss", step=epoch)
-                fitlog.add_metric({"dev": {"Val Acc": acc_val}}, step=epoch)
+                    model_dir = os.path.join(args.model_dir_name, 'lincls_' + args.model_name + "_split" + str(args.split) + "_bestmodel" + '.pt')
+                    torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': classifier.state_dict()}, model_dir)
+                    print('Saving models and results at {} epoch to {}'.format(epoch, model_dir))
+                    logging_table.to_csv(os.path.join(args.model_dir_name, 'predictions_val.csv'), index=False)
+
     return best_lincls
 
 
-def test_lincls(test_loader, trained_backbone, best_lincls, logger, fitlog, DEVICE, criterion, args, plt=False):
+def test_lincls(test_loader, trained_backbone, best_lincls, logger, DEVICE, criterion, args, plt=False):
     classifier = setup_linclf(args, DEVICE, trained_backbone.out_dim)
     classifier.load_state_dict(best_lincls)
     total_loss = 0
-    total = 0
-    correct = 0
-    confusion_matrix = torch.zeros(args.n_class, args.n_class)
+    mae = 0
     feats = None
-    trgs = np.array([])
-    preds = np.array([])
+    hr_true, hr_pred, pids = [], [], []
+    total = 0
     with torch.no_grad():
         classifier.eval()
         with tqdm(test_loader, desc=f"Test Lincls", unit='batch') as tepoch:
             for idx, (sample, target, domain) in enumerate(tepoch):
+                total += 1
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).long()
                 loss, predicted, feat = calculate_lincls_output(sample, target, trained_backbone, classifier, criterion)
                 total_loss += loss.item()
@@ -439,30 +499,28 @@ def test_lincls(test_loader, trained_backbone, best_lincls, logger, fitlog, DEVI
                     feats = feat
                 else:
                     feats = torch.cat((feats, feat), 0)
-                trgs = np.append(trgs, target.data.cpu().numpy())
-                preds = np.append(preds, predicted.data.cpu().numpy())
-                for t, p in zip(target.view(-1), predicted.view(-1)):
-                    confusion_matrix[t.long(), p.long()] += 1
-                total += target.size(0)
-                correct += (predicted == target).sum()
-        acc_test = float(correct) * 100.0 / total
+                hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                hr_pred.extend(predicted.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                pids.extend(domain.cpu().numpy().squeeze())
+                mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
+        
+        logging_table = pd.DataFrame({ 
+                    "hr_true": hr_true, 
+                    "hr_pred": hr_pred,
+                    "pid": pids
+                    }) 
+        wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+        mae_test = mae / total
+        corr_val = np.round(corr(hr_true, hr_pred),3)
+        wandb.log({'Test_Loss': total_loss, 'Test_MAE': mae_test, "Test_Corr": corr_val})
+        logger.debug(f'epoch test loss     : {total_loss:.4f}, test mae     : {mae_test:.4f}')
+        print('Saving results to {}'.format(args.model_dir_name))
+        logging_table.to_csv(os.path.join(args.model_dir_name, 'predictions_test.csv'), index=False)
 
-        miF = f1_score(trgs, preds, average='micro') * 100
-        maF = f1_score(trgs, preds, average='weighted') * 100
 
-        logger.debug(f'epoch test loss     : {total_loss:.4f}, test acc     : {acc_test:.4f}, miF     : {miF:.4f}, maF     : {maF:.4f}')
-
-        fitlog.add_best_metric({"dev": {"Test Loss": total_loss}})
-        fitlog.add_best_metric({"dev": {"Test Acc": acc_test}})
-        fitlog.add_best_metric({"dev": {"miF": miF}})
-        fitlog.add_best_metric({"dev": {"maF": maF}})
-
-        logger.debug(confusion_matrix)
-        logger.debug(confusion_matrix.diag() / confusion_matrix.sum(1))
 
     if plt == True:
         tsne(feats, trgs, save_dir=plot_dir_name + '/' + args.model_name + '_tsne.png')
         mds(feats, trgs, save_dir=plot_dir_name + '/' + args.model_name + '_mds.png')
-        sns_plot = sns.heatmap(confusion_matrix, cmap='Blues', annot=True)
         sns_plot.get_figure().savefig(plot_dir_name + '/' + args.model_name + '_confmatrix.png')
         print('plots saved to ', plot_dir_name)

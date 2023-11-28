@@ -37,9 +37,10 @@ parser.add_argument('--batch_size', type=int, default=64, help='batch size of tr
 parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
+parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay')
 
 # dataset
-parser.add_argument('--dataset', type=str, default='max', choices=['apple','max'], help='name of dataset')
+parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep'], help='name of dataset')
 parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--split', type=int, default=0, help='split number')
@@ -77,13 +78,11 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
 
     for epoch in range(num_epochs): # loop over epochs
             
-        logger.debug(f'\nEpoch : {epoch}')
 
         train_loss = 0
         n_batches = 0
         total = 0
         mae = 0
-        mae_train = 0
         hr_true, hr_pred = [], []
 
         model.train()
@@ -108,8 +107,8 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 predicted = out.data
                 total += target.size(0)
                 mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
-                hr_true.extend(target.cpu().numpy().squeeze())
-                hr_pred.extend(predicted.cpu().numpy().squeeze())
+                hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
+                hr_pred.extend(predicted.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
 
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
@@ -119,7 +118,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
     
     
         # Validation
-        model_dir = os.path.join(save_dir, args.model_name + '_model.pt')
+        model_dir = os.path.join(args.model_dir_name, args.model_name + '_model.pt')
 
         if val_loader is None:
             best_model = deepcopy(model.state_dict())
@@ -173,7 +172,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                     best_model = deepcopy(model.state_dict())
                     print('Saving models and results at {} epoch to {}'.format(epoch, model_dir))
                     torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
-                    logging_table.to_csv(os.path.join(save_dir, args.model_name + '_predictions_val.csv'), index=False)
+                    logging_table.to_csv(os.path.join(args.model_dir_name, args.model_name + '_predictions_val.csv'), index=False)
 
     return best_model
 
@@ -273,8 +272,8 @@ if __name__ == '__main__':
     # Creates directory for saving results from models from the same split
     model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) 
     # Create directory for results
-    save_dir = os.path.join(results_dir, model_name)
-    os.makedirs(save_dir, exist_ok=True)
+    args.model_dir_name = os.path.join(results_dir, model_name)
+    os.makedirs(args.model_dir_name, exist_ok=True)
     args.model_name = model_name + '_split' + str(args.split) 
 
     # Initialize logger
@@ -289,7 +288,7 @@ if __name__ == '__main__':
 
     # Initialize optimizer
     parameters = model.parameters()
-    optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.parser)
 
     # Training
     #######################
@@ -316,7 +315,7 @@ if __name__ == '__main__':
     elif args.backbone == 'Transformer':
         model_test = Transformer(n_channels=args.n_feature, len_sw=args.input_len, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":
-        model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False)
+        model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False, input_size=args.input_length)
     else:
         NotImplementedError
 

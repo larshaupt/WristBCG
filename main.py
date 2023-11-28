@@ -1,6 +1,7 @@
 import argparse
 from trainer import *
 import wandb
+from config import results_dir
 
 wandb.login()
 
@@ -9,6 +10,7 @@ wandb.login()
 parser = argparse.ArgumentParser(description='argument setting of network')
 parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
 parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
+parser.add_argument('--pretrain', action='store_true', help='if or not to pretrain the backbone network')
 
 # hyperparameter
 parser.add_argument('--batch_size', type=int, default=64, help='batch size of training')
@@ -19,10 +21,11 @@ parser.add_argument('--scheduler', type=bool, default=True, help='if or not to u
 parser.add_argument('--weight_decay', default=1e-4, type=float, metavar='W', help='weight decay (default: 1e-4)', dest='weight_decay')
 
 # dataset
-parser.add_argument('--dataset', type=str, default='ucihar', choices=['ucihar', 'max', 'apple', 'capture24'], help='name of dataset')
-parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
-parser.add_argument('--len_sw', type=int, default=30, help='length of sliding window')
-parser.add_argument('--n_class', type=int, default=18, help='number of class')
+parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24'], help='name of dataset')
+parser.add_argument('--dataset', type=str, default='max', choices=['ucihar', 'max', 'apple', 'capture24'], help='name of dataset for finetuning')
+parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
+parser.add_argument('--len_sw', type=int, default=1000, help='length of sliding window')
+parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--split', type=int, default=0, help='split number')
 parser.add_argument('--hr_min', type=float, default=20, help='minimum heart rate for training, not needed for pretraining')
 parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rate for training, not needed for pretraining')
@@ -71,20 +74,33 @@ if __name__ == '__main__':
     np.random.seed(10)
     args = parser.parse_args()
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
-    print('device:', DEVICE, 'dataset:', args.dataset)
 
-    train_loaders, val_loader, test_loader = setup_dataloaders(args)
     model, optimizers, schedulers, criterion, logger, classifier, criterion_cls, optimizer_cls = setup(args, DEVICE)
-    best_pretrain_model = train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
+
+    print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
+    train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=True)
+
+    args.model_dir_name = os.path.join(results_dir, args.model_name)
+    os.makedirs(args.model_dir_name, exist_ok=True)
+
+    if not args.pretrain: # no pretraining, load previously trained model
+        best_pretrain_model = load_best_model(args)
+
+
+    if args.pretrain or best_pretrain_model == None: # pretraining
+        best_pretrain_model = train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
 
     best_pretrain_model = test(test_loader, best_pretrain_model, logger, DEVICE, criterion, args)
-
+    
     ############################################################################################################
+    print('device:', DEVICE, 'dataset:', args.dataset)
+    train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=False)
 
     trained_backbone = lock_backbone(best_pretrain_model, args)
 
     best_lincls = train_lincls(train_loaders, val_loader, trained_backbone, classifier, logger, DEVICE, optimizer_cls, criterion_cls, args)
-    test_lincls(test_loader, trained_backbone, best_lincls, logger, DEVICE, criterion_cls, args, plt=args.plt)
+    if len(test_loader) != 0:
+        test_lincls(test_loader, trained_backbone, best_lincls, logger, DEVICE, criterion_cls, args, plt=args.plt)
 
     # remove saved intermediate models
     delete_files(args)

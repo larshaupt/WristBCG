@@ -93,7 +93,7 @@ class CorNET(nn.Module):
             self.classifier = nn.Linear(LSTM_units, n_classes) 
 
     def forward(self, x):
-        #self.lstm.flatten_parameters()
+        self.lstm.flatten_parameters()
         x = x.permute(0, 2, 1)
         x = self.conv1(x)
         x = self.maxpool1(x)

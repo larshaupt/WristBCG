@@ -116,16 +116,24 @@ def load_data_no_labels(data_path, split=0):
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
-def prep_hr(args):
-    if args.dataset == 'max':
+def prep_hr(args, dataset=None, split=None):
+    if dataset is None:
+        dataset = args.dataset
+    if split is None:
+        split = args.split
+
+    if dataset == 'max':
         data_path = config.data_dir_Max_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=args.split)
-    elif args.dataset == 'apple':
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split)
+    elif dataset == 'apple':
         data_path = config.data_dir_Apple_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=args.split)
-    elif args.dataset == 'capture24':
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split)
+    elif dataset == 'm2sleep':
+        data_path = config.data_dir_M2Sleep_processed
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split)
+    elif dataset == 'capture24':
         data_path = config.data_dir_Capture24_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=args.split)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split)
     
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
