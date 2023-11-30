@@ -19,6 +19,7 @@ from tqdm import tqdm
 import pandas as pd
 import config
 import pdb
+import matplotlib.pyplot as plt
 
 # create directory for saving models and plots
 global model_dir_name
@@ -30,6 +31,23 @@ if not os.path.exists(plot_dir_name):
     os.makedirs(plot_dir_name)
 
 corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
+
+def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
+    figure = plt.figure(figsize=(8, 8))
+    hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
+    mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
+    correlation_coefficient = corr(hr_true, hr_pred)
+
+    plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae}, Corr: {correlation_coefficient}")
+
+    plt.plot(x_lim, y_lim, color='k', linestyle='-', linewidth=2)
+    plt.xlim(*x_lim)
+    plt.ylim(*y_lim)
+    plt.xlabel('True HR (bpm)')
+    plt.ylabel('Predicted HR (bpm)')
+    plt.legend()
+    return figure
+    
 
 def setup_dataloaders(args, pretrain=False):
 

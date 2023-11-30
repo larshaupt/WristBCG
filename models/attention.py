@@ -107,11 +107,11 @@ class Transformer(nn.Module):
 
 
 class Seq_Transformer(nn.Module):
-    def __init__(self, n_channel, len_sw, n_classes, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1):
+    def __init__(self, n_channel, input_size, n_classes, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1):
         super().__init__()
         self.patch_to_embedding = nn.Linear(n_channel, dim)
         self.c_token = nn.Parameter(torch.randn(1, 1, dim))
-        self.position = PositionalEncoding(d_model=dim, max_len=len_sw)
+        self.position = PositionalEncoding(d_model=dim, max_len=input_size)
         self.transformer = Transformer(dim, depth, heads, mlp_dim, dropout)
         self.to_c_token = nn.Identity()
         self.classifier = nn.Linear(dim, n_classes)

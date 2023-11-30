@@ -1,6 +1,7 @@
 import argparse
 from trainer import *
 import wandb
+import json
 from config import results_dir
 
 wandb.login()
@@ -82,6 +83,9 @@ if __name__ == '__main__':
 
     args.model_dir_name = os.path.join(results_dir, args.model_name)
     os.makedirs(args.model_dir_name, exist_ok=True)
+    with open(os.path.join(args.model_dir_name, "config.json"), "w") as outfile:
+        print(f"Saving config file to {args.model_dir_name}")
+        json.dump(vars(args), outfile)
 
     if not args.pretrain: # no pretraining, load previously trained model
         best_pretrain_model = load_best_model(args)

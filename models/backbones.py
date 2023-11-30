@@ -186,18 +186,18 @@ class LSTM(nn.Module):
             return out, x
 
 class AE(nn.Module):
-    def __init__(self, n_channels, len_sw, n_classes, outdim=128, backbone=True):
+    def __init__(self, n_channels, input_size, n_classes, outdim=128, backbone=True):
         super(AE, self).__init__()
 
         self.backbone = backbone
-        self.len_sw = len_sw
+        self.input_size = input_size
 
         self.e1 = nn.Linear(n_channels, 8)
-        self.e2 = nn.Linear(8 * len_sw, 2 * len_sw)
-        self.e3 = nn.Linear(2 * len_sw, outdim)
+        self.e2 = nn.Linear(8 * input_size, 2 * input_size)
+        self.e3 = nn.Linear(2 * input_size, outdim)
 
-        self.d1 = nn.Linear(outdim, 2 * len_sw)
-        self.d2 = nn.Linear(2 * len_sw, 8 * len_sw)
+        self.d1 = nn.Linear(outdim, 2 * input_size)
+        self.d2 = nn.Linear(2 * input_size, 8 * input_size)
         self.d3 = nn.Linear(8, n_channels)
 
         self.out_dim = outdim
@@ -213,7 +213,7 @@ class AE(nn.Module):
 
         x_d1 = self.d1(x_encoded)
         x_d2 = self.d2(x_d1)
-        x_d2 = x_d2.reshape(x_d2.shape[0], self.len_sw, 8)
+        x_d2 = x_d2.reshape(x_d2.shape[0], self.input_size, 8)
         x_decoded = self.d3(x_d2)
 
         if self.backbone:
@@ -316,12 +316,12 @@ class CNN_AE(nn.Module):
             return out, x_decoded
 
 class Transformer(nn.Module):
-    def __init__(self, n_channels, len_sw, n_classes, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True):
+    def __init__(self, n_channels, input_size, n_classes, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True):
         super(Transformer, self).__init__()
 
         self.backbone = backbone
         self.out_dim = dim
-        self.transformer = Seq_Transformer(n_channel=n_channels, len_sw=len_sw, n_classes=n_classes, dim=dim, depth=depth, heads=heads, mlp_dim=mlp_dim, dropout=dropout)
+        self.transformer = Seq_Transformer(n_channel=n_channels, input_size=input_size, n_classes=n_classes, dim=dim, depth=depth, heads=heads, mlp_dim=mlp_dim, dropout=dropout)
         if backbone == False:
             self.classifier = nn.Linear(dim, n_classes)
 

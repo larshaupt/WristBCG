@@ -2,7 +2,6 @@
 import matplotlib.pyplot as plt
 # matplotlib.use('Agg')
 import seaborn as sns
-from sklearn.metrics import confusion_matrix
 from models.backbones import *
 from models.loss import *
 from trainer import *
@@ -23,6 +22,7 @@ from utils import tsne, mds, _logger
 from config import results_dir, plot_dir, data_dir_Max_processed, data_dir_Apple_processed
 from tqdm import tqdm
 import pandas as pd
+import json
 
 wandb.login()
 
@@ -30,6 +30,11 @@ wandb.login()
 # Parse command line arguments
 ##################
 parser = argparse.ArgumentParser(description='argument setting of network')
+
+# arguments for data preprocessing
+parser.add_argument("--json_load", type=str, default="", help="json file for loading data")
+parser.add_argument("--test_only", action="store_true", help="only test the model")
+
 parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
 parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
 # hyperparameter
@@ -38,9 +43,11 @@ parser.add_argument('--n_epoch', type=int, default=60, help='number of training 
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
 parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay')
+parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'RMSprop'], help='optimizer')
+parser.add_argument('--loss', type=str, default='MSE', choices=['MSE', 'MAE', 'Huber'], help='loss function')
 
 # dataset
-parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep'], help='name of dataset')
+parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep', 'capture24'], help='name of dataset')
 parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--split', type=int, default=0, help='split number')
@@ -58,7 +65,7 @@ parser.add_argument('--wandb_mode', type=str, default='online', choices=['offlin
 parser.add_argument('--lambda1', type=float, default=1.0, help='weight for reconstruction loss when backbone in [AE, CNN_AE]')
 
 
-corr = lambda a, b: np.round(pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1],2)
+corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
 
 # Create directory for saving and plots
 ##################
@@ -112,7 +119,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
 
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
-        corr_train = corr(hr_true, hr_pred)
+        corr_train = np.round(corr(hr_true, hr_pred),3)
         wandb.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
         logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\n')
     
@@ -165,7 +172,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 wandb.log({"true_pred_val": figure}, step=epoch)
 
                 mae_val = mae / n_batches
-                corr_val = corr(hr_true, hr_pred)
+                corr_val = np.round(corr(hr_true, hr_pred),3)
                 wandb.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
                 logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\n')
 
@@ -197,7 +204,7 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                 out, features = model(sample)
                 loss = criterion(out, target)
                 total_loss += loss.item()
-                _, predicted = torch.max(out.data, 1)
+                predicted = out.data
                 total += target.size(0)
                 mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
                 tepoch.set_postfix(test_loss=loss.item())
@@ -219,7 +226,7 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
             
 
     mae_val = mae / n_batches
-    corr_val = corr(hr_true, hr_pred)
+    corr_val = np.round(corr(hr_true, hr_pred),3)
     wandb.log({"Test_Loss": total_loss / n_batches, "Test_MAE": mae_val, "Test_Corr": corr_val})
 
     logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest MAE     : {mae_val:2.4f}\n')
@@ -233,7 +240,7 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     figure = plt.figure(figsize=(8, 8))
     hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
     mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
-    correlation_coefficient = corr(hr_true, hr_pred)
+    correlation_coefficient = np.round(corr(hr_true, hr_pred),3)
 
     plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae}, Corr: {correlation_coefficient}")
 
@@ -243,6 +250,7 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     plt.xlabel('True HR (bpm)')
     plt.ylabel('Predicted HR (bpm)')
     plt.legend()
+    
     return figure
     
 
@@ -255,6 +263,15 @@ if __name__ == '__main__':
     np.random.seed(10)
     args = parser.parse_args()
 
+    if args.json_load.endswith(".json") and os.path.isfile(args.json_load):
+        with open(args.json_load, "r") as f:
+            args.__dict__.update(json.load(f))
+        print(f"Loaded args from {args.json_load}")
+        args.from_json = True
+        args.wandb_mode = "disabled"
+    else:
+        args.from_json = False
+
     # Initialize W&B
     run = wandb.init(
     # Set the project where this run will be logged
@@ -266,7 +283,6 @@ if __name__ == '__main__':
 
     # Set device
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
-    DEVICE = torch.device('cpu')
     print('device:', DEVICE, 'dataset:', args.dataset)
 
     # Load data
@@ -280,11 +296,11 @@ if __name__ == '__main__':
     elif args.backbone == 'LSTM':
         model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
     elif args.backbone == 'AE':
-        model = AE(n_channels=args.n_feature, len_sw=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
+        model = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
         model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, input_size=args.input_length, backbone=False)
     elif args.backbone == 'Transformer':
-        model = Transformer(n_channels=args.n_feature, len_sw=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+        model = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":
         model = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False)
     else:
@@ -300,6 +316,11 @@ if __name__ == '__main__':
     os.makedirs(args.model_dir_name, exist_ok=True)
     args.model_name = model_name + '_split' + str(args.split) 
 
+    with open(os.path.join(args.model_dir_name, "config.json"), "w") as outfile:
+        print(f"Saving config file to {args.model_dir_name}")
+        json.dump(vars(args), outfile)
+
+
     # Initialize logger
     if os.path.isdir(args.logdir) == False:
         os.makedirs(args.logdir)
@@ -308,11 +329,23 @@ if __name__ == '__main__':
     logger.debug(args)
 
     # Loss function for regression
-    criterion = nn.MSELoss()
+    if args.loss == 'MSE':
+        criterion = nn.MSELoss()
+    elif args.loss == 'MAE':
+        criterion = nn.L1Loss()
+    elif args.loss == 'Huber':
+        criterion = nn.HuberLoss(delta=5.0)
 
     # Initialize optimizer
     parameters = model.parameters()
-    optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.weight_decay)
+    if args.optimizer == 'Adam':
+        optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.weight_decay)
+    elif args.optimizer == 'SGD':
+        optimizer = torch.optim.SGD(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    elif args.optimizer == 'RMSprop':
+        optimizer = torch.optim.RMSprop(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    else:
+        NotImplementedError
 
     # Training
     #######################
@@ -333,11 +366,11 @@ if __name__ == '__main__':
     elif args.backbone == 'LSTM':
         model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
     elif args.backbone == 'AE':
-        model_test = AE(n_channels=args.n_feature, len_sw=args.input_len, n_classes=args.n_class, outdim=128, backbone=False)
+        model_test = AE(n_channels=args.n_feature, input_size=args.input_len, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
         model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, backbone=False)
     elif args.backbone == 'Transformer':
-        model_test = Transformer(n_channels=args.n_feature, len_sw=args.input_len, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+        model_test = Transformer(n_channels=args.n_feature, input_size=args.input_len, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":
         model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False, input_size=args.input_length)
     else:
@@ -350,7 +383,6 @@ if __name__ == '__main__':
         test_loss = test(test_loader, model_test, DEVICE, criterion, plt=False)
         test_loss_list.append(test_loss)
     else:
-        test_loss_list.append(0)
         print('No test data. Skip testing...')
 
     training_end = datetime.now()
