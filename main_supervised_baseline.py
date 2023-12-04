@@ -18,7 +18,7 @@ from data_preprocess.data_preprocess_utils import normalize
 from scipy import signal
 from copy import deepcopy
 import wandb
-from utils import tsne, mds, _logger
+from utils import tsne, mds, _logger, get_free_gpu
 from config import results_dir, plot_dir, data_dir_Max_processed, data_dir_Apple_processed
 from tqdm import tqdm
 import pandas as pd
@@ -34,25 +34,28 @@ parser = argparse.ArgumentParser(description='argument setting of network')
 # arguments for data preprocessing
 parser.add_argument("--json_load", type=str, default="", help="json file for loading data")
 parser.add_argument("--test_only", action="store_true", help="only test the model")
+parser.add_argument("--no_saving", action="store_true", help="do not save the model")
 
-parser.add_argument('--cuda', default=0, type=int, help='cuda device ID，0/1')
+parser.add_argument('--cuda', default=-1, type=int, help='cuda device ID，0/1')
 parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
 # hyperparameter
-parser.add_argument('--batch_size', type=int, default=64, help='batch size of training')
+parser.add_argument('--batch_size', type=int, default=128, help='batch size of training')
 parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
-parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
+parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
-parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay')
+parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight decay')
 parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'RMSprop'], help='optimizer')
-parser.add_argument('--loss', type=str, default='MSE', choices=['MSE', 'MAE', 'Huber'], help='loss function')
+parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber'], help='loss function')
+parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
 # dataset
-parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep', 'capture24'], help='name of dataset')
-parser.add_argument('--n_feature', type=int, default=77, help='name of feature dimension')
+parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100'], help='name of dataset')
+parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--split', type=int, default=0, help='split number')
 parser.add_argument('--hr_min', type=float, default=20, help='minimum heart rate for training')
 parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rate for training')
+parser.add_argument('--sampling_rate', type=int, default=0, help='sampling rate of the data. Warning: this will take longer time to load data')
 
 # backbone model
 parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer', 'CorNET'], help='name of framework')
@@ -130,7 +133,8 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
         if val_loader is None:
             best_model = deepcopy(model.state_dict())
             print('Saving models at {} epoch to {}'.format(epoch, model_dir))
-            torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
+            if args.no_saving == False:
+                torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
         else:
             with torch.no_grad():
                 model.eval()
@@ -167,7 +171,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                                     "pid": pids
                                     })
                 
-                wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
+                #wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
                 figure = plot_true_pred(hr_true, hr_pred)
                 wandb.log({"true_pred_val": figure}, step=epoch)
 
@@ -180,7 +184,8 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                     min_val_loss = val_loss
                     best_model = deepcopy(model.state_dict())
                     print('Saving models and results at {} epoch to {}'.format(epoch, model_dir))
-                    torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
+                    if args.no_saving == False:
+                        torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
                     logging_table.to_csv(os.path.join(args.model_dir_name, args.model_name + '_predictions_val.csv'), index=False)
 
     return best_model
@@ -219,7 +224,7 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                             "hr_pred": hr_pred,
                             "pid": pids
                             })
-        wandb.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
+        #wandb.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
         figure = plot_true_pred(hr_true, hr_pred)
         wandb.log({"true_pred_test": figure})
         
@@ -261,8 +266,10 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
 if __name__ == '__main__':
     torch.manual_seed(10)
     np.random.seed(10)
+    
     args = parser.parse_args()
 
+    # Load args from json if json is passed
     if args.json_load.endswith(".json") and os.path.isfile(args.json_load):
         with open(args.json_load, "r") as f:
             args.__dict__.update(json.load(f))
@@ -282,6 +289,10 @@ if __name__ == '__main__':
     )
 
     # Set device
+    if args.cuda == -1:
+        args.cuda = int(get_free_gpu())
+        print(f"Automatically selected GPU {args.cuda}")
+
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
     print('device:', DEVICE, 'dataset:', args.dataset)
 
@@ -312,8 +323,15 @@ if __name__ == '__main__':
     # Creates directory for saving results from models from the same split
     model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) 
     # Create directory for results
-    args.model_dir_name = os.path.join(results_dir, model_name)
-    os.makedirs(args.model_dir_name, exist_ok=True)
+    model_time = int(datetime.now().timestamp())
+    #args.model_dir_name = os.path.join(results_dir, f"{model_time}_{model_name}")
+    args.model_dir_name = os.path.join(results_dir, f"{model_name}")
+    
+    
+    if args.no_saving == False:
+        os.makedirs(args.model_dir_name, exist_ok=True)
+    
+    # saves same models with different splits in the same directory
     args.model_name = model_name + '_split' + str(args.split) 
 
     with open(os.path.join(args.model_dir_name, "config.json"), "w") as outfile:
@@ -334,7 +352,7 @@ if __name__ == '__main__':
     elif args.loss == 'MAE':
         criterion = nn.L1Loss()
     elif args.loss == 'Huber':
-        criterion = nn.HuberLoss(delta=5.0)
+        criterion = nn.HuberLoss(delta=args.huber_delta)
 
     # Initialize optimizer
     parameters = model.parameters()
@@ -366,11 +384,11 @@ if __name__ == '__main__':
     elif args.backbone == 'LSTM':
         model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
     elif args.backbone == 'AE':
-        model_test = AE(n_channels=args.n_feature, input_size=args.input_len, n_classes=args.n_class, outdim=128, backbone=False)
+        model_test = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
         model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, backbone=False)
     elif args.backbone == 'Transformer':
-        model_test = Transformer(n_channels=args.n_feature, input_size=args.input_len, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+        model_test = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":
         model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False, input_size=args.input_length)
     else:

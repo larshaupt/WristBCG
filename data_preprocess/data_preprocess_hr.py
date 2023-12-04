@@ -14,6 +14,8 @@ from torch.utils.data import Dataset, DataLoader
 import config
 import re
 import json
+from scipy.signal import resample
+from scipy.interpolate import interp1d
 
 NUM_FEATURES = 1
 
@@ -78,6 +80,9 @@ def load_data(data_path, split=0, from_split_json=False):
             x.append(x_)
             y.append(y_)
             pid.append(pid_)
+        if len(x) == 0:
+            return np.array([]), np.array([]), np.array([])
+            
         x = np.concatenate(x)
         y = np.concatenate(y)
         pid = np.concatenate(pid)
@@ -96,8 +101,8 @@ def load_data(data_path, split=0, from_split_json=False):
         x_train, y_train, d_train = load_split(train, data_path)
         x_val, y_val, d_val = load_split(val, data_path)
         x_test, y_test, d_test = load_split(test, data_path)
-    else:
 
+    else:
         split_path = os.path.join(data_path, 'split_'+str(split))
         with open(os.path.join(split_path, 'train.pickle'), 'rb') as f:
             train = cp.load(f)
@@ -109,10 +114,6 @@ def load_data(data_path, split=0, from_split_json=False):
         (x_train, y_train, d_train) = train
         (x_val, y_val, d_val) = val
         (x_test, y_test, d_test) = test
-
-    def transform_domain_to_float(domain):
-        domain = np.array([float(re.sub("[^0-9.]", "", el)) if isinstance(el, str) else el for el in domain])
-        return domain
     
     #d_train = np.array([transform_domain_to_float(el) for el in d_train])
     #d_val = np.array([transform_domain_to_float(el) for el in d_val])
@@ -188,7 +189,7 @@ def load_data_no_labels(data_path, split:int=0, from_split_json=False):
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
-def prep_hr(args, dataset=None, split=None):
+def prep_hr(args, dataset=None, split=None, resampling_rate=1):
     if dataset is None:
         dataset = args.dataset
     if split is None:
@@ -196,19 +197,29 @@ def prep_hr(args, dataset=None, split=None):
 
     if dataset == 'max':
         data_path = config.data_dir_Max_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, from_split_json=True)
     elif dataset == 'apple':
         data_path = config.data_dir_Apple_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, from_split_json=True)
     elif dataset == 'm2sleep':
         data_path = config.data_dir_M2Sleep_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,from_split_json=True)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, from_split_json=True)
     elif dataset == 'capture24':
         data_path = config.data_dir_Capture24_processed
         x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split, from_split_json=True)
+    elif dataset == 'apple100':
+        data_path = config.data_dir_Apple_processed_100hz
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, from_split_json=True)
+    elif dataset == 'm2sleep100':
+        data_path = config.data_dir_M2Sleep_processed_100Hz
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, from_split_json=True)
     
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
+    if resampling_rate != 1:
+        x_train, y_train, d_train = resample_data(x_train, y_train, d_train, resampling_rate)
+        x_val, y_val, d_val = resample_data(x_val, y_val, d_val, resampling_rate)
+        x_test, y_test, d_test = resample_data(x_test, y_test, d_test, resampling_rate)
 
     train_set = data_loader_hr(x_train, y_train, d_train, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, num_workers=args.num_workers, pin_memory=True, shuffle=True)
@@ -224,6 +235,18 @@ def prep_hr(args, dataset=None, split=None):
     print(f"Number of batches in test_loader: {len(test_loader)}")
 
     return train_loader, val_loader, test_loader
+
+def resample_data(x, y, d, resampling_rate):
+    x_resampled = resample(x, int(x.shape[0]/resampling_rate), axis=1)
+    time_vector = np.arange(0, x.shape[1], 1)
+    time_vector_resampled = np.arange(0, x.shape[1], 1/resampling_rate)
+    f_y = interp1d(time_vector, y, axis=1)
+    f_d = interp1d(time_vector, d, axis=1)
+    y_resampled = f_y(time_vector_resampled, kind='linear', copy=False, fill_value="extrapolate")
+    d_resampled = f_d(time_vector_resampled, kind='previous', copy=False, fill_value="extrapolate")
+    return x_resampled, y_resampled, d_resampled
+
+
 
 def test_prep_hr():
     # Define mock arguments

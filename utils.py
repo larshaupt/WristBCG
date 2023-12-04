@@ -5,6 +5,8 @@ from sklearn.manifold import TSNE
 from sklearn.manifold import MDS
 import seaborn as sns
 import matplotlib.pyplot as plt
+import subprocess
+import re
 
 def _logger(logger_name, level=logging.DEBUG):
     """
@@ -66,3 +68,28 @@ def mds(latent, y_ground_truth, save_dir):
         )
 
     sns_plot.get_figure().savefig(save_dir)
+
+def get_gpu_info():
+    try:
+        output = subprocess.check_output(['nvidia-smi', '--query-gpu=index,memory.total,memory.free', '--format=csv,noheader,nounits'])
+        gpu_info = output.decode('utf-8')
+        return gpu_info.split('\n')[:-1]  # Remove the last empty element
+    except subprocess.CalledProcessError:
+        return None
+
+def get_free_gpu():
+    gpu_info = get_gpu_info()
+    if gpu_info:
+        gpu_data = [info.split(', ') for info in gpu_info]
+        gpu_data = sorted(gpu_data, key=lambda x: int(x[2]), reverse=True)  # Sort by free memory
+        return gpu_data[0][0]  # Return index of the GPU with the most free memory
+    else:
+        return None
+
+def main():
+    free_gpu = get_free_gpu()
+    if free_gpu is not None:
+        print(f"The best available GPU is GPU {free_gpu}")
+        # Use free_gpu for further processing or training
+    else:
+        print("No available GPUs found.")

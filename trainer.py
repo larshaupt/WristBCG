@@ -68,24 +68,54 @@ def setup_dataloaders(args, pretrain=False):
                                                                                 device=args.device,
                                                                                 train_user=source_domain,
                                                                                 test_user=args.target_domain)
-    elif dataset == 'max' or dataset == 'apple' or dataset == 'capture24' or dataset == 'm2sleep':
+    elif dataset == 'max' or dataset == 'apple' or dataset == 'capture24' or dataset == 'm2sleep' or dataset == 'apple100' or dataset == 'm2sleep100':
         args.n_feature = 3
         args.n_class = 1
         
         if dataset == 'max':
             args.input_length = 1000
             args.len_sw = 1000
+            original_sampling_rate = 100
+
+
         elif dataset == "apple":
             args.input_length = 500
             args.len_sw = 500
+            original_sampling_rate = 50
+
+
         elif dataset == "m2sleep":
             args.input_length = 320
             args.len_sw = 320
+            original_sampling_rate = 32
+
+        elif dataset == "m2sleep100":
+            args.input_length = 1000
+            args.len_sw = 1000
+            original_sampling_rate = 100
+
+
+        elif dataset == "apple100":
+            # apple dataset with 100Hz sampling rate
+            args.input_length = 1000
+            args.len_sw = 1000
+            original_sampling_rate = 100
+
+
         else: # capture24
             args.input_length = 1000
             args.len_sw = 1000
+            original_sampling_rate = 100
 
-        train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split)
+        # sets the resampling ratio
+        if args.sampling_rate == 0 or args.sampling_rate == original_sampling_rate: 
+            # no resampling
+            resampling_rate = 1
+        else:
+            # resampling
+            resampling_rate = args.sampling_rate / original_sampling_rate
+
+        train_loaders, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split, resampling_rate=resampling_rate)
     
    
     else:
