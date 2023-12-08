@@ -114,10 +114,7 @@ def load_data(data_path, split=0, from_split_json=False):
         (x_train, y_train, d_train) = train
         (x_val, y_val, d_val) = val
         (x_test, y_test, d_test) = test
-    
-    #d_train = np.array([transform_domain_to_float(el) for el in d_train])
-    #d_val = np.array([transform_domain_to_float(el) for el in d_val])
-    #d_test = np.array([transform_domain_to_float(el) for el in d_test])
+
     d_train = d_train.astype(float)
     d_val = d_val.astype(float)
     d_test = d_test.astype(float)

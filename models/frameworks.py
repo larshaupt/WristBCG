@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .backbones import *
 from .TC import *
 
+
 class SimCLR(nn.Module):
     def __init__(self, backbone, dim=128):
         super(SimCLR, self).__init__()

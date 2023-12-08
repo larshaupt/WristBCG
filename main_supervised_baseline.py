@@ -23,6 +23,7 @@ from config import results_dir, plot_dir, data_dir_Max_processed, data_dir_Apple
 from tqdm import tqdm
 import pandas as pd
 import json
+from torchmetrics.regression import LogCoshError
 
 wandb.login()
 
@@ -45,7 +46,7 @@ parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
 parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
 parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight decay')
 parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'RMSprop'], help='optimizer')
-parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber'], help='loss function')
+parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh'], help='loss function')
 parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
 # dataset
@@ -58,7 +59,10 @@ parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rat
 parser.add_argument('--sampling_rate', type=int, default=0, help='sampling rate of the data. Warning: this will take longer time to load data')
 
 # backbone model
-parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer', 'CorNET'], help='name of framework')
+parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer', 'CorNET', 'TCN'], help='name of framework')
+parser.add_argument('--num_kernels', type=int, default=16, help='number of kernels in CNN')
+parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
+parser.add_argument('--lstm_units', type=int, default=192, help='number of units in LSTM')
 
 # log
 parser.add_argument('--logdir', type=str, default='log/', help='log directory')
@@ -124,7 +128,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
         mae_train = mae / n_batches
         corr_train = np.round(corr(hr_true, hr_pred),3)
         wandb.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
-        logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\n')
+        logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\t | \tTrain Corr     : {corr_train:2.4f}\n')
     
     
         # Validation
@@ -178,13 +182,13 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 mae_val = mae / n_batches
                 corr_val = np.round(corr(hr_true, hr_pred),3)
                 wandb.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
-                logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\n')
+                logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\t | \tVal Corr     : {corr_val:2.4f}\n \n')
 
                 if val_loss <= min_val_loss:
                     min_val_loss = val_loss
                     best_model = deepcopy(model.state_dict())
                     print('Saving models and results at {} epoch to {}'.format(epoch, model_dir))
-                    if args.no_saving == False:
+                    if args.no_saving == False:  
                         torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
                     logging_table.to_csv(os.path.join(args.model_dir_name, args.model_name + '_predictions_val.csv'), index=False)
 
@@ -303,9 +307,9 @@ if __name__ == '__main__':
     if args.backbone == 'FCN':
         model = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=False)
     elif args.backbone == 'DCL':
-        model = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=128, backbone=False)
+        model = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, backbone=False)
     elif args.backbone == 'LSTM':
-        model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
+        model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=False)
     elif args.backbone == 'AE':
         model = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
@@ -313,9 +317,17 @@ if __name__ == '__main__':
     elif args.backbone == 'Transformer':
         model = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":
-        model = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False)
+        model = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=False, input_size=args.input_length)
+    elif args.backbone == "TCN":
+        model = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=False)
     else:
         NotImplementedError
+
+    total_params = sum(
+	    param.numel() for param in model.parameters()
+    )
+
+    wandb.log({"Total_Params": total_params})
 
     model = model.to(DEVICE)
 
@@ -353,6 +365,11 @@ if __name__ == '__main__':
         criterion = nn.L1Loss()
     elif args.loss == 'Huber':
         criterion = nn.HuberLoss(delta=args.huber_delta)
+    elif args.loss == 'LogCosh':
+        criterion = LogCoshError()
+
+
+
 
     # Initialize optimizer
     parameters = model.parameters()
@@ -380,9 +397,9 @@ if __name__ == '__main__':
     if args.backbone == 'FCN':
         model_test = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=False)
     elif args.backbone == 'DCL':
-        model_test = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=64, kernel_size=5, LSTM_units=128, input_size=args.input_length, backbone=False)
+        model_test = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, input_size=args.input_length, backbone=False)
     elif args.backbone == 'LSTM':
-        model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=128, backbone=False)
+        model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=False)
     elif args.backbone == 'AE':
         model_test = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
     elif args.backbone == 'CNN_AE':
@@ -390,7 +407,9 @@ if __name__ == '__main__':
     elif args.backbone == 'Transformer':
         model_test = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":
-        model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False, input_size=args.input_length)
+        model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=False, input_size=args.input_length)
+    elif args.backbone == "TCN":
+        model = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=2, dropout=0.2, backbone=False)
     else:
         NotImplementedError
 
