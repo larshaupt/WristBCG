@@ -37,8 +37,10 @@ parser.add_argument("--json_load", type=str, default="", help="json file for loa
 parser.add_argument("--test_only", action="store_true", help="only test the model")
 parser.add_argument("--no_saving", action="store_true", help="do not save the model")
 
+# arguments for training process
 parser.add_argument('--cuda', default=-1, type=int, help='cuda device ID，0/1')
 parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
+
 # hyperparameter
 parser.add_argument('--batch_size', type=int, default=128, help='batch size of training')
 parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
@@ -48,6 +50,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight dec
 parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'RMSprop'], help='optimizer')
 parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh'], help='loss function')
 parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
+parser.add_argument('--num_ensemble', type=int, default=1, help='number of ensemble models')
 
 # dataset
 parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100'], help='name of dataset')
@@ -84,7 +87,7 @@ os.makedirs(plot_dir_name, exist_ok=True)
 # Training function
 #######################
 
-def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
+def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion, wandb_run):
 
     min_val_loss = 1e8
     num_epochs = args.n_epoch
@@ -127,7 +130,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
         corr_train = np.round(corr(hr_true, hr_pred),3)
-        wandb.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
+        wandb_run.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
         logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\t | \tTrain Corr     : {corr_train:2.4f}\n')
     
     
@@ -175,13 +178,13 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion):
                                     "pid": pids
                                     })
                 
-                #wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
+                #wandb_run.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
                 figure = plot_true_pred(hr_true, hr_pred)
-                wandb.log({"true_pred_val": figure}, step=epoch)
+                wandb_run.log({"true_pred_val": figure}, step=epoch)
 
                 mae_val = mae / n_batches
                 corr_val = np.round(corr(hr_true, hr_pred),3)
-                wandb.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
+                wandb_run.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
                 logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\t | \tVal Corr     : {corr_val:2.4f}\n \n')
 
                 if val_loss <= min_val_loss:
@@ -222,21 +225,21 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                 feats.append(features.cpu().numpy().squeeze())
                 pids.extend(domain.cpu().numpy().squeeze())
 
-                
-        logging_table = pd.DataFrame({ 
-                            "hr_true": hr_true, 
-                            "hr_pred": hr_pred,
-                            "pid": pids
-                            })
-        #wandb.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
-        figure = plot_true_pred(hr_true, hr_pred)
-        wandb.log({"true_pred_test": figure})
-        
             
+    logging_table = pd.DataFrame({ 
+                        "hr_true": hr_true, 
+                        "hr_pred": hr_pred,
+                        "pid": pids
+                        })
+    #wandb_run.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
 
     mae_val = mae / n_batches
     corr_val = np.round(corr(hr_true, hr_pred),3)
+
+    figure = plot_true_pred(hr_true, hr_pred)
+    wandb.log({"true_pred_test": figure})
     wandb.log({"Test_Loss": total_loss / n_batches, "Test_MAE": mae_val, "Test_Corr": corr_val})
+
 
     logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest MAE     : {mae_val:2.4f}\n')
 
@@ -283,14 +286,6 @@ if __name__ == '__main__':
     else:
         args.from_json = False
 
-    # Initialize W&B
-    run = wandb.init(
-    # Set the project where this run will be logged
-    project="hr_ssl",
-    # Track hyperparameters and run metadata
-    config=vars(args),
-    mode = args.wandb_mode
-    )
 
     # Set device
     if args.cuda == -1:
@@ -303,34 +298,6 @@ if __name__ == '__main__':
     # Load data
     train_loaders, val_loader, test_loader = setup_dataloaders(args)
 
-    # Initialize model
-    if args.backbone == 'FCN':
-        model = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=False)
-    elif args.backbone == 'DCL':
-        model = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, backbone=False)
-    elif args.backbone == 'LSTM':
-        model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=False)
-    elif args.backbone == 'AE':
-        model = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
-    elif args.backbone == 'CNN_AE':
-        model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, input_size=args.input_length, backbone=False)
-    elif args.backbone == 'Transformer':
-        model = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
-    elif args.backbone == "CorNET":
-        model = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=False, input_size=args.input_length)
-    elif args.backbone == "TCN":
-        model = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=False)
-    else:
-        NotImplementedError
-
-    total_params = sum(
-	    param.numel() for param in model.parameters()
-    )
-
-    wandb.log({"Total_Params": total_params})
-
-    model = model.to(DEVICE)
-
     # Set model name
     # Creates directory for saving results from models from the same split
     model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) 
@@ -338,58 +305,115 @@ if __name__ == '__main__':
     model_time = int(datetime.now().timestamp())
     #args.model_dir_name = os.path.join(results_dir, f"{model_time}_{model_name}")
     args.model_dir_name = os.path.join(results_dir, f"{model_name}")
-    
+
+    # Initialize logger
+    if os.path.isdir(args.logdir) == False:
+        os.makedirs(args.logdir)
+
     
     if args.no_saving == False:
         os.makedirs(args.model_dir_name, exist_ok=True)
-    
-    # saves same models with different splits in the same directory
-    args.model_name = model_name + '_split' + str(args.split) 
 
+    
     with open(os.path.join(args.model_dir_name, "config.json"), "w") as outfile:
         print(f"Saving config file to {args.model_dir_name}")
         json.dump(vars(args), outfile)
 
 
-    # Initialize logger
-    if os.path.isdir(args.logdir) == False:
-        os.makedirs(args.logdir)
-    log_file_name = os.path.join(args.logdir, args.model_name + f".log")
-    logger = _logger(log_file_name)
-    logger.debug(args)
+    group_id = wandb.util.generate_id()
 
-    # Loss function for regression
-    if args.loss == 'MSE':
-        criterion = nn.MSELoss()
-    elif args.loss == 'MAE':
-        criterion = nn.L1Loss()
-    elif args.loss == 'Huber':
-        criterion = nn.HuberLoss(delta=args.huber_delta)
-    elif args.loss == 'LogCosh':
-        criterion = LogCoshError()
+    for i_ensemble in range(args.num_ensemble):
+
+        # Initialize W&B
 
 
+        config_dict = vars(args)
+        config_dict.update({"i_ensemble": i_ensemble})
+
+        wandb_run = wandb.init(
+        resume="allow",
+        group=group_id,
+        job_type = "train",
+        # Set the project where this run will be logged
+        project="hr_ssl",
+        reinit = True,
+        # Track hyperparameters and run metadata
+        config=config_dict,
+        mode=args.wandb_mode,
+        )
 
 
-    # Initialize optimizer
-    parameters = model.parameters()
-    if args.optimizer == 'Adam':
-        optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.weight_decay)
-    elif args.optimizer == 'SGD':
-        optimizer = torch.optim.SGD(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
-    elif args.optimizer == 'RMSprop':
-        optimizer = torch.optim.RMSprop(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
-    else:
-        NotImplementedError
+        # Initialize model
+        if args.backbone == 'FCN':
+            model = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=False)
+        elif args.backbone == 'DCL':
+            model = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, backbone=False)
+        elif args.backbone == 'LSTM':
+            model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=False)
+        elif args.backbone == 'AE':
+            model = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
+        elif args.backbone == 'CNN_AE':
+            model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, input_size=args.input_length, backbone=False)
+        elif args.backbone == 'Transformer':
+            model = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
+        elif args.backbone == "CorNET":
+            model = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=False, input_size=args.input_length)
+        elif args.backbone == "TCN":
+            model = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=False)
+        else:
+            NotImplementedError
 
-    # Training
-    #######################
-    training_start = datetime.now()
-    train_loss_list = []
-    test_loss_list = []
+        total_params = sum(
+            param.numel() for param in model.parameters()
+        )
 
-    best_model = train(args, train_loaders, val_loader, model, DEVICE, optimizer, criterion)
+        wandb_run.log({"Total_Params": total_params}, step=0)
 
+        model = model.to(DEVICE)
+        
+        # saves same models with different splits in the same directory
+        args.model_name = model_name + '_split' + str(args.split) 
+        if args.num_ensemble != 1:
+            args.model_name += '_ensemble' + str(args.num_ensemble)
+
+        
+        log_file_name = os.path.join(args.logdir, args.model_dir_name + f".log")
+        logger = _logger(log_file_name)
+        logger.debug(args)
+
+
+
+        # Loss function for regression
+        if args.loss == 'MSE':
+            criterion = nn.MSELoss()
+        elif args.loss == 'MAE':
+            criterion = nn.L1Loss()
+        elif args.loss == 'Huber':
+            criterion = nn.HuberLoss(delta=args.huber_delta)
+        elif args.loss == 'LogCosh':
+            criterion = LogCoshError()
+
+
+        # Initialize optimizer
+        parameters = model.parameters()
+        if args.optimizer == 'Adam':
+            optimizer = torch.optim.Adam(parameters, args.lr, weight_decay=args.weight_decay)
+        elif args.optimizer == 'SGD':
+            optimizer = torch.optim.SGD(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
+        elif args.optimizer == 'RMSprop':
+            optimizer = torch.optim.RMSprop(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
+        else:
+            NotImplementedError
+
+        # Training
+        #######################
+        training_start = datetime.now()
+        test_loss_list = []
+
+        best_model = train(args, train_loaders, val_loader, model, DEVICE, optimizer, criterion, wandb_run=wandb_run)
+
+        if args.num_ensemble != 1:
+            wandb_run.finish()
 
     # Testing
     #######################
@@ -413,6 +437,19 @@ if __name__ == '__main__':
     else:
         NotImplementedError
 
+    if args.num_ensemble != 1:
+        wandb_run = wandb.init(
+            resume="allow",
+            group=group_id,
+            job_type = "test",
+            # Set the project where this run will be logged
+            project="hr_ssl",
+            reinit = False,
+            # Track hyperparameters and run metadata
+            config=config_dict,
+            mode=args.wandb_mode,
+            )
+
     # Testing
     if len(test_loader) != 0:
         model_test.load_state_dict(best_model)
@@ -425,4 +462,5 @@ if __name__ == '__main__':
     training_end = datetime.now()
     training_time = training_end - training_start
     logger.debug(f"Training time is : {training_time}")
-    run.finish()
+    
+    wandb_run.finish()
