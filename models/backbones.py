@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from .attention import *
 from .MMB import *
+import matplotlib.pyplot as plt
+import os
 
 class FCN(nn.Module):
     def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
@@ -42,7 +44,7 @@ class FCN(nn.Module):
         self.out_dim = self.out_len * self.out_channels
 
         if backbone == False:
-            self.logits = nn.Linear(self.out_len * out_channels, n_classes)
+            self.classifier = nn.Linear(self.out_len * out_channels, n_classes)
 
     def forward(self, x_in):
         x_in = x_in.permute(0, 2, 1)
@@ -54,8 +56,12 @@ class FCN(nn.Module):
             return None, x
         else:
             x_flat = x.reshape(x.shape[0], -1)
-            logits = self.logits(x_flat)
+            logits = self.classifier(x_flat)
             return logits, x
+        
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
 
 
 class CorNET(nn.Module):
@@ -67,6 +73,7 @@ class CorNET(nn.Module):
         
         self.activation = nn.ELU()
         self.backbone = backbone
+        self.n_classes = n_classes
         self.dropout = nn.Dropout(0.1)
         self.conv1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
                                          nn.BatchNorm1d(conv_kernels),
@@ -119,6 +126,54 @@ class CorNET(nn.Module):
             out = self.classifier(x)
             return out, x
 
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+    def plot_layers(self, x, plot_dir):
+
+        def plot_save(x, plot_dir, name):
+            x = x.detach().cpu().numpy()
+
+            if len(x.shape) == 1:
+                x = x.reshape(1, -1)
+
+            plt.figure()
+            for i in range(x.shape[0]):
+                plt.plot(x[i,:])
+            plt.savefig(os.path.join(plot_dir, name))
+            plt.close()
+
+        self.lstm.flatten_parameters()
+        x = x.permute(0, 2, 1)
+        plot_save(x[0, 0, :], plot_dir, 'input.png')
+        x = self.conv1(x)
+        x = self.maxpool1(x)
+        x = self.dropout(x)
+        plot_save(x[0, 0, :], plot_dir, 'conv1.png')
+        x = self.conv2(x)
+        x = self.maxpool2(x)
+        x = self.dropout(x)
+        plot_save(x[0, 0, :], plot_dir, 'conv2.png')
+        x = x.permute(2, 0, 1)
+        # shape is (L, N, H_in)
+        # L - seq_len, N - batch_size, H_in - input_size
+        # L = 19
+        # N = 64
+        # H_in = 32
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+
+
+        x, h = self.lstm(x)
+        x = x[-1, :, :]
+        plot_save(x[0, :], plot_dir, 'lstm.png')
+
+        if self.backbone:
+            return None, x
+        else:
+            out = self.classifier(x)
+            return out, x
+
 
 class DeepConvLSTM(nn.Module):
     def __init__(self, n_channels, n_classes, conv_kernels=64, kernel_size=5, LSTM_units=128, input_size:int=500, backbone=True):
@@ -161,6 +216,10 @@ class DeepConvLSTM(nn.Module):
         else:
             out = self.classifier(x)
             return out, x
+        
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
 
 class LSTM(nn.Module):
     def __init__(self, n_channels, n_classes, LSTM_units=128, backbone=True):

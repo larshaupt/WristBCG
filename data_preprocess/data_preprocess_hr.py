@@ -22,9 +22,13 @@ NUM_FEATURES = 1
 
 
 class data_loader_hr(Dataset):
-    def __init__(self, samples, labels, domains, hr_norm=True, hr_min=20, hr_max=120):
+    def __init__(self, samples, labels, domains, hr_norm=True, hr_min=20, hr_max=120, normalize=False):
 
         self.samples = samples
+
+        if normalize:
+            self.samples = (self.samples - np.mean(self.samples, axis=1, keepdims=True)) / np.std(self.samples, axis=1, keepdims=True)
+
         self.hr_norm = hr_norm
         self.hr_max = hr_max
         self.hr_min = hr_min
@@ -34,8 +38,6 @@ class data_loader_hr(Dataset):
             self.labels = labels
         self.domains = domains
         
-
-
 
     def __getitem__(self, index):
         #print('index: ', index)
@@ -218,13 +220,13 @@ def prep_hr(args, dataset=None, split=None, resampling_rate=1):
         x_val, y_val, d_val = resample_data(x_val, y_val, d_val, resampling_rate)
         x_test, y_test, d_test = resample_data(x_test, y_test, d_test, resampling_rate)
 
-    train_set = data_loader_hr(x_train, y_train, d_train, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
+    train_set = data_loader_hr(x_train, y_train, d_train, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max, normalize=args.normalize)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, num_workers=args.num_workers, pin_memory=True, shuffle=True)
 
-    test_set = data_loader_hr(x_test, y_test, d_test, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
+    test_set = data_loader_hr(x_test, y_test, d_test, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max, normalize=args.normalize)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
 
-    val_set = data_loader_hr(x_val, y_val, d_val, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max)
+    val_set = data_loader_hr(x_val, y_val, d_val, hr_norm=True, hr_min=args.hr_min, hr_max=args.hr_max, normalize=args.normalize)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
 
     print(f"Number of batches in train_loader: {len(train_loader)}")

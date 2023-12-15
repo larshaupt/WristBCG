@@ -357,14 +357,14 @@ def prep_hhar(args, SLIDING_WINDOW_LEN=100, SLIDING_WINDOW_STEP=50, device='Phon
     weights = 100.0 / torch.Tensor(counts_ytrain)
     weights = weights.double()
     print('weights of sampler: ', weights)
-    sample_weights = get_sample_weights(y_train, weights)
+    # sample_weights = get_sample_weights(y_train, weights)
 
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+    # sampler = torch.utils.data.sampler.WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
 
     train_set = data_loader_hhar(x_train, y_train, d_train)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
-    test_set = data_loader_hhar(x_test, y_test, d_test)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, drop_last=False)
+    test_set = data_loader_hhar(x_test, y_test, d_test, shuffle=True, drop_last=False)
+    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, drop_last=False)
 
     print('train_loader batch: ', len(train_loader), 'test_loader batch: ', len(test_loader))
 

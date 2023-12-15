@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from datetime import datetime
+import re
 
 from models.backbones import *
 from models.loss import *
@@ -17,11 +18,19 @@ from argparse import Namespace
 #%%
 
 
-json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/CorNET_max_lr0.0001_bs64/config.json"
+json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/CorNET_apple100_lr0.0005_bs128/config.json"
 with open(json_file) as json_file:
     json_args = json.load(json_file)
 
 args = Namespace(**json_args)
+split = 0
+
+
+if not hasattr(args, "model_name"):
+    args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_split' + str(split)
+else:
+    args.model_name = re.sub(r'split\d+', f"split{split}", args.model_name)
+
 model_weights_path = os.path.join(args.model_dir_name, args.model_name + '_model.pt')
 #args.batch_size = 1
 
@@ -48,7 +57,7 @@ elif args.backbone == 'CNN_AE':
 elif args.backbone == 'Transformer':
     model_test = Transformer(n_channels=args.n_feature, input_size=args.input_len, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
 elif args.backbone == "CorNET":
-    model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=32, kernel_size=40, LSTM_units=128, backbone=False, input_size=args.input_length)
+    model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=False, input_size=args.input_length)
 else:
     NotImplementedError
 
@@ -63,7 +72,7 @@ model_test = model_test.to(DEVICE)
 
 X, Y, D, P = [], [], [], []
 
-for i, (x, y, d) in enumerate(val_loader):
+for i, (x, y, d) in enumerate(test_loader):
     x = x.to(DEVICE).float()
     y = y.to(DEVICE)
     d = d.to(DEVICE)
@@ -78,7 +87,6 @@ for i, (x, y, d) in enumerate(val_loader):
     P.append(p)
 
     
-# %%
 X = np.concatenate(X)
 Y = np.concatenate(Y)
 D = np.concatenate(D)

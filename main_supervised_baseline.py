@@ -14,7 +14,6 @@ import numpy as np
 import os
 import logging
 import sys
-from data_preprocess.data_preprocess_utils import normalize
 from scipy import signal
 from copy import deepcopy
 import wandb
@@ -45,7 +44,6 @@ parser.add_argument('--num_workers', default=0, type=int, help='number of worker
 parser.add_argument('--batch_size', type=int, default=128, help='batch size of training')
 parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
 parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
-parser.add_argument('--lr_cls', type=float, default=1e-3, help='learning rate for linear classifier')
 parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight decay')
 parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'RMSprop'], help='optimizer')
 parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh'], help='loss function')
@@ -54,6 +52,7 @@ parser.add_argument('--num_ensemble', type=int, default=1, help='number of ensem
 
 # dataset
 parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100'], help='name of dataset')
+parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
 parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--split', type=int, default=0, help='split number')
@@ -106,7 +105,6 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion, w
         with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training", unit='batch') as tepoch:
             for idx, (sample, target, domain) in enumerate(tepoch): # loop over training batches
                 
-
                 n_batches += 1
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(-1, 1)
                 if args.backbone[-2:] == 'AE':
@@ -129,9 +127,10 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion, w
 
                 tepoch.set_postfix(loss=loss.item())
         mae_train = mae / n_batches
-        corr_train = np.round(corr(hr_true, hr_pred),3)
-        wandb_run.log({"Train_Loss": train_loss / n_batches, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
-        logger.debug(f'Train Loss     : {train_loss / n_batches:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\t | \tTrain Corr     : {corr_train:2.4f}\n')
+        corr_train = corr(hr_true, hr_pred)
+        loss_train = train_loss / n_batches
+        wandb_run.log({"Train_Loss": loss_train, "Train_MAE": mae_train, 'Train_Corr': corr_train}, step=epoch)
+        logger.debug(f'Train Loss     : {loss_train:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\t | \tTrain Corr     : {corr_train:2.4f}\n')
     
     
         # Validation
@@ -183,9 +182,9 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion, w
                 wandb_run.log({"true_pred_val": figure}, step=epoch)
 
                 mae_val = mae / n_batches
-                corr_val = np.round(corr(hr_true, hr_pred),3)
+                corr_val = corr(hr_true, hr_pred)
                 wandb_run.log({"Val_Loss": val_loss / n_batches, "Val_MAE": mae_val, 'Val_Corr': corr_val}, step=epoch)
-                logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\t | \tVal Corr     : {corr_val:2.4f}\n \n')
+                logger.debug(f'Val Loss     : {val_loss / n_batches:.4f}\t | \tVal MAE     : {mae_val:2.4f}\t | \tVal Corr     : {corr_val:.4f}\n \n')
 
                 if val_loss <= min_val_loss:
                     min_val_loss = val_loss
@@ -204,7 +203,6 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
         model.eval()
         total_loss = 0
         n_batches = 0
-        total = 0
         mae = 0
         feats = None
         hr_true, hr_pred, feats, pids = [], [], [], []
@@ -217,7 +215,6 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                 loss = criterion(out, target)
                 total_loss += loss.item()
                 predicted = out.data
-                total += target.size(0)
                 mae += torch.abs(predicted - target).mean() * (args.hr_max - args.hr_min)
                 tepoch.set_postfix(test_loss=loss.item())
                 hr_true.extend(target.cpu().numpy().squeeze() * (args.hr_max - args.hr_min) + args.hr_min)
@@ -233,28 +230,29 @@ def test(test_loader, model, DEVICE, criterion, plt=False):
                         })
     #wandb_run.log({"hr_true_vs_pred_test": wandb.Table(dataframe = pd.DataFrame(logging_table))})
 
-    mae_val = mae / n_batches
-    corr_val = np.round(corr(hr_true, hr_pred),3)
+    mae_test = mae / n_batches
+    corr_test = corr(hr_true, hr_pred)
+    loss_test = total_loss / n_batches
 
     figure = plot_true_pred(hr_true, hr_pred)
     wandb.log({"true_pred_test": figure})
-    wandb.log({"Test_Loss": total_loss / n_batches, "Test_MAE": mae_val, "Test_Corr": corr_val})
+    wandb.log({"Test_Loss": loss_test, "Test_MAE": mae_test, "Test_Corr": corr_test})
 
 
-    logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}\t | \tTest MAE     : {mae_val:2.4f}\n')
+    logger.debug(f'Test Loss     : {loss_test:.4f}\t | \tTest MAE     : {mae_test:2.4f} \t | \tTest Corr     : {corr_test:.4f}\n')
 
     if plt == True:
         tsne(feats, hr_true, domain=None, save_dir=plot_dir_name + args.model_name + '_tsne.png')
         mds(feats, hr_true, domain=None, save_dir=plot_dir_name + args.model_name + 'mds.png')
-    return total_loss
+    return loss_test
 
 def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     figure = plt.figure(figsize=(8, 8))
     hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
     mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
-    correlation_coefficient = np.round(corr(hr_true, hr_pred),3)
+    correlation_coefficient = corr(hr_true, hr_pred)
 
-    plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae}, Corr: {correlation_coefficient}")
+    plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae:.2f}, Corr: {correlation_coefficient:.2f}")
 
     plt.plot(x_lim, y_lim, color='k', linestyle='-', linewidth=2)
     plt.xlim(*x_lim)
@@ -326,12 +324,11 @@ if __name__ == '__main__':
 
         # Initialize W&B
 
-
         config_dict = vars(args)
         config_dict.update({"i_ensemble": i_ensemble})
 
         wandb_run = wandb.init(
-        resume="allow",
+        resume=None,
         group=group_id,
         job_type = "train",
         # Set the project where this run will be logged
@@ -366,6 +363,7 @@ if __name__ == '__main__':
         total_params = sum(
             param.numel() for param in model.parameters()
         )
+        wandb.watch(model, log='all')
 
         wandb_run.log({"Total_Params": total_params}, step=0)
 
@@ -392,6 +390,7 @@ if __name__ == '__main__':
             criterion = nn.HuberLoss(delta=args.huber_delta)
         elif args.loss == 'LogCosh':
             criterion = LogCoshError()
+            criterion = criterion.to(DEVICE)
 
 
         # Initialize optimizer
@@ -404,7 +403,7 @@ if __name__ == '__main__':
             optimizer = torch.optim.RMSprop(parameters, args.lr, momentum=0.9, weight_decay=args.weight_decay)
         else:
             NotImplementedError
-
+    
         # Training
         #######################
         training_start = datetime.now()
