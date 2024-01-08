@@ -1,3 +1,4 @@
+#%%
 import torch
 from torch import nn
 from .attention import *
@@ -244,25 +245,24 @@ class LSTM(nn.Module):
             out = self.classifier(x)
             return out, x
 
-class AE(nn.Module):
-    def __init__(self, n_channels, input_size, n_classes, outdim=128, backbone=True):
-        super(AE, self).__init__()
+class AE_encoder(nn.Module):
+    def __init__(self, n_channels, input_size, n_classes=1, out_dim=128, backbone=True):
+        super(AE_encoder, self).__init__()
 
         self.backbone = backbone
         self.input_size = input_size
+        self.n_channels = n_channels
+        self.out_dim = out_dim
 
-        self.e1 = nn.Linear(n_channels, 8)
+        self.e1 = nn.Linear(self.n_channels, 8)
         self.e2 = nn.Linear(8 * input_size, 2 * input_size)
-        self.e3 = nn.Linear(2 * input_size, outdim)
+        self.e3 = nn.Linear(2 * input_size, self.out_dim)
 
-        self.d1 = nn.Linear(outdim, 2 * input_size)
-        self.d2 = nn.Linear(2 * input_size, 8 * input_size)
-        self.d3 = nn.Linear(8, n_channels)
+        self.out_length = self.out_dim
 
-        self.out_dim = outdim
+        if not self.backbone:
+            self.classifier = nn.Linear(self.out_dim, n_classes)
 
-        if backbone == False:
-            self.classifier = nn.Linear(outdim, n_classes)
 
     def forward(self, x):
         x_e1 = self.e1(x)
@@ -270,109 +270,225 @@ class AE(nn.Module):
         x_e2 = self.e2(x_e1)
         x_encoded = self.e3(x_e2)
 
-        x_d1 = self.d1(x_encoded)
+        if self.backbone:
+            return None, x_encoded
+        else:
+            out = self.classifier(x_encoded)
+            return out, x_encoded
+        
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+class AE_decoder(nn.Module):
+    def __init__(self, n_channels, input_size, out_dim=128, n_channels_out=None):
+        super(AE_decoder, self).__init__()
+        self.out_dim = out_dim
+        self.input_size = input_size
+        if n_channels_out == None:
+            self.n_channels_out = n_channels
+        else:
+            self.n_channels_out = n_channels_out
+
+        self.d1 = nn.Linear(out_dim, 2 * self.input_size)
+        self.d2 = nn.Linear(2 * self.input_size, 8 * self.input_size)
+        self.d3 = nn.Linear(8, self.n_channels_out)
+
+    def forward(self, x):
+        x_d1 = self.d1(x)
         x_d2 = self.d2(x_d1)
         x_d2 = x_d2.reshape(x_d2.shape[0], self.input_size, 8)
         x_decoded = self.d3(x_d2)
 
+        return x_decoded
+
+
+
+class AE(nn.Module):
+    def __init__(self, n_channels, input_size, n_classes, embdedded_size=128, n_channels_out=None, backbone=True):
+        super(AE, self).__init__()
+
+        self.backbone = backbone
+        self.input_size = input_size
+        self.n_channels = n_channels
+        self.embdedded_size = embdedded_size
+        self.out_dim = embdedded_size
+        if n_channels_out == None:
+            self.n_channels_out = n_channels
+        else:
+            self.n_channels_out = n_channels_out
+
+        self.encoder = AE_encoder(n_channels, input_size, n_classes, self.embdedded_size, backbone)
+        self.decoder = AE_decoder(n_channels, input_size, self.embdedded_size, n_channels_out)
+
+
+
+    def forward(self, x):
+        
+        out, x_encoded = self.encoder(x)
+        x_decoded = self.decoder(x_encoded)
+
         if self.backbone:
             return x_decoded, x_encoded
         else:
             out = self.classifier(x_encoded)
             return out, x_decoded
+        
+    def set_classification_head(self, classifier):
+        self.encoder.set_classification_head(classifier)
+        self.backbone = False
 
-class CNN_AE(nn.Module):
-    def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
-        super(CNN_AE, self).__init__()
-
-        self.backbone = backbone
+class CNN_AE_encoder(nn.Module):
+    def __init__(self, n_channels, input_size: int = 1000, n_classes=1, out_dim=128, backbone=True):
+        super(CNN_AE_encoder, self).__init__()
+        self.input_size = input_size
         self.n_channels = n_channels
+        self.backbone = backbone
+        self.out_dim = out_dim
 
-        # vector size after a convolutional layer is given by:
-        # (input_size - kernel_size + 2 * padding) / stride + 1
-        # latent dimension = (input_dim + 9)/4
 
-        self.padding_length = (8 -(input_size + 21) % 8) % 8
-        input_size += self.padding_length
-        self.padding = nn.ReflectionPad1d((0, self.padding_length))
-
-        self.e_conv1 = nn.Sequential(nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
-                                         nn.BatchNorm1d(32),
-                                         nn.ReLU())
+        self.e_conv1 = nn.Sequential(
+            nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.BatchNorm1d(32),
+            nn.ReLU()
+        )
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
         self.dropout = nn.Dropout(0.35)
-        
+
         out_size = (input_size - 8 + 2 * 4) // 1 + 1
         out_size = (out_size - 2 + 2 * 1) // 2 + 1
 
-        self.e_conv2 = nn.Sequential(nn.Conv1d(32, 64, kernel_size=8, stride=1, bias=False, padding=4),
-                                         nn.BatchNorm1d(64),
-                                         nn.ReLU())
+        self.e_conv2 = nn.Sequential(
+            nn.Conv1d(32, 64, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.BatchNorm1d(64),
+            nn.ReLU()
+        )
         self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
         out_size = (out_size - 8 + 2 * 4) // 1 + 1
         out_size = (out_size - 2 + 2 * 1) // 2 + 1
 
-        self.e_conv3 = nn.Sequential(nn.Conv1d(64, out_channels, kernel_size=8, stride=1, bias=False, padding=4),
-                                         nn.BatchNorm1d(out_channels),
-                                         nn.ReLU())
+        self.e_conv3 = nn.Sequential(
+            nn.Conv1d(64, self.out_dim, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.BatchNorm1d(self.out_dim),
+            nn.ReLU()
+        )
         self.pool3 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
         out_size = (out_size - 8 + 2 * 4) // 1 + 1
         out_size = (out_size - 2 + 2 * 1) // 2 + 1
-        self.out_dim = out_size * out_channels
+        self.output_length = out_size
+
+        if not self.backbone:
+            self.classifier = nn.Linear(self.out_dim*out_size, n_classes)
+
+        self.out_dim = (self.out_dim, self.output_length)
+
+    def forward(self, x):
+        x = x.permute(0, 2, 1)
+        x = self.e_conv1(x)
+        pool1_size = x.shape
+        x, indice1 = self.pool1(x)
+        x = self.dropout(x)
+        x = self.e_conv2(x)
+        pool2_size = x.shape
+        x, indice2 = self.pool2(x)
+        x = self.e_conv3(x)
+        pool3_size = x.shape
+        x_encoded, indice3 = self.pool3(x)
+
+
+        if self.backbone:
+            return None, x_encoded, (indice1, indice2, indice3), (pool1_size, pool2_size, pool3_size)
+        else:
+            out = self.classifier(x_encoded)
+            return out, x_encoded #, (indice1, indice2, indice3), (pool1_size, pool2_size, pool3_size)
+        
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+
+class CNN_AE_decoder(nn.Module):
+    def __init__(self, out_channels, n_channels_out, input_size: int = 500):
+        super(CNN_AE_decoder, self).__init__()
+        self.input_size = input_size
+        self.n_channels_out = n_channels_out
+
+        out_size = input_size
 
         self.unpool1 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
-        self.d_conv1 = nn.Sequential(nn.ConvTranspose1d(out_channels, 64, kernel_size=8, stride=1, bias=False, padding=4),
-                                     nn.BatchNorm1d(64),
-                                     nn.ReLU())
-        # Transposed convolution and unpool
+        self.d_conv1 = nn.Sequential(
+            nn.ConvTranspose1d(out_channels, 64, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.BatchNorm1d(64),
+            nn.ReLU()
+        )
         out_size = (out_size - 1) * 2 - 2 * 1 + 2
         out_size = (out_size - 1) * 1 - 2 * 4 + 8
-        #self.lin1 = nn.Linear(out_size, out_size)
         self.lin1 = nn.Identity()
 
-
         self.unpool2 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
-        self.d_conv2 = nn.Sequential(nn.ConvTranspose1d(64, 32, kernel_size=8, stride=1, bias=False, padding=4),
-                                     nn.BatchNorm1d(32),
-                                     nn.ReLU())
+        self.d_conv2 = nn.Sequential(
+            nn.ConvTranspose1d(64, 32, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.BatchNorm1d(32),
+            nn.ReLU()
+        )
         out_size = (out_size - 1) * 2 - 2 * 1 + 2
         out_size = (out_size - 1) * 1 - 2 * 4 + 8
 
         self.unpool3 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
-        self.d_conv3 = nn.Sequential(nn.ConvTranspose1d(32, n_channels, kernel_size=8, stride=1, bias=False, padding=4),
-                                     nn.BatchNorm1d(n_channels),
-                                     nn.ReLU())
+        self.d_conv3 = nn.Sequential(
+            nn.ConvTranspose1d(32, self.n_channels_out, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.BatchNorm1d(self.n_channels_out),
+            nn.ReLU()
+        )
         out_size = (out_size - 1) * 2 - 2 * 1 + 2
         out_size = (out_size - 1) * 1 - 2 * 4 + 8
-        #self.lin2 = nn.Linear(out_size, input_size)
         self.lin2 = nn.Identity()
-        out_size = input_size
 
-
-        if backbone == False:
-            self.classifier = nn.Linear(self.out_dim, n_classes)
-
-    def forward(self, x):
-        x = x.permute(0, 2, 1)
-        x = self.padding(x)
-        x, indice1 = self.pool1(self.e_conv1(x))
-        x = self.dropout(x)
-        x, indice2 = self.pool2(self.e_conv2(x))
-        x_encoded, indice3 = self.pool3(self.e_conv3(x))
-        x = self.d_conv1(self.unpool1(x_encoded, indice3))
+    def forward(self, x_encoded, indices, pool_sizes):
+        indice1, indice2, indice3 = indices
+        pool1_size, pool2_size, pool3_size = pool_sizes
+        x = self.d_conv1(self.unpool1(x_encoded, indice3, output_size=pool3_size))
         x = self.lin1(x)
-        x = self.d_conv2(self.unpool2(x, indice2))
-        x = self.d_conv3(self.unpool3(x, indice1))
-        x = x[:,:, :-self.padding_length]
+        x = self.d_conv2(self.unpool2(x, indice2, output_size=pool2_size))
+        x = self.d_conv3(self.unpool3(x, indice1, output_size=pool1_size))
         x_decoded = self.lin2(x)
         x_decoded = x_decoded.permute(0, 2, 1)
-        x_encoded = x_encoded.reshape(x_encoded.shape[0], -1)
+        return x_decoded
+
+
+class CNN_AE(nn.Module):
+    def __init__(self, n_channels, n_classes, embdedded_size=128, n_channels_out=None, input_size: int = 1000, backbone=True):
+        super(CNN_AE, self).__init__()
+        self.input_size = input_size
+        self.backbone = backbone
+        self.n_channels = n_channels
+        self.embdedded_size = embdedded_size
+        if n_channels_out is None:
+            self.n_channels_out = n_channels
+        else:
+            self.n_channels_out = n_channels_out
+
+        self.encoder = CNN_AE_encoder(self.n_channels, input_size = input_size, n_classes=n_classes, out_dim=self.embdedded_size, backbone=backbone)
+        self.decoder = CNN_AE_decoder(self.embdedded_size, n_channels_out, input_size = input_size)
+
+        self.out_dim = self.encoder.out_dim
+        self.output_length = self.encoder.output_length
+
+
+    def forward(self, x):
+        out, x_encoded, indices, pool_sizes = self.encoder(x)
+        x_decoded = self.decoder(x_encoded, indices, pool_sizes)
         
         if self.backbone:
             return x_decoded, x_encoded
         else:
-            out = self.classifier(x_encoded)
             return out, x_decoded
+
+    def set_classification_head(self, classifier):
+        self.encoder.set_classification_head(classifier)
+        self.backbone = False
+
+
 
 class Transformer(nn.Module):
     def __init__(self, n_channels, input_size, n_classes, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True):
@@ -391,6 +507,25 @@ class Transformer(nn.Module):
         else:
             out = self.classifier(x)
             return out, x
+        
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+class LSTM_Classifier(nn.Module):
+    def __init__(self, bb_dim, n_classes):
+        super(LSTM_Classifier, self).__init__()
+        self.n_classes = n_classes
+        self.hidden_size, self.input_length = bb_dim
+        self.lstm = nn.LSTM(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2)
+        self.classifier = nn.Linear(self.hidden_size, self.n_classes)
+
+    def forward(self, x):
+        x = x.permute(1, 0, 2)
+        x, (h, c) = self.lstm(x)
+        x = x[-1, :, :]
+        out = self.classifier(x)
+        return out
 
 class Classifier(nn.Module):
     def __init__(self, bb_dim, n_classes):
@@ -399,6 +534,7 @@ class Classifier(nn.Module):
         self.classifier = nn.Linear(bb_dim, n_classes)
 
     def forward(self, x):
+        x = x.reshape(x.shape[0], -1)
         out = self.classifier(x)
 
         return out
@@ -1049,3 +1185,7 @@ def weight_init(self, mode="fan_out", nonlinearity="relu"):
         elif isinstance(m, (nn.BatchNorm1d)):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
+
+
+
+            

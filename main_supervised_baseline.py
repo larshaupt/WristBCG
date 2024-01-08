@@ -34,11 +34,12 @@ parser = argparse.ArgumentParser(description='argument setting of network')
 # arguments for data preprocessing
 parser.add_argument("--json_load", type=str, default="", help="json file for loading data")
 parser.add_argument("--test_only", action="store_true", help="only test the model")
-parser.add_argument("--no_saving", action="store_true", help="do not save the model")
+parser.add_argument("--saving", type=bool, default=True, help="if or not to save model and results")
 
 # arguments for training process
 parser.add_argument('--cuda', default=-1, type=int, help='cuda device ID，0/1')
 parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
+parser.add_argument('--random_seed', default=10, type=int, help='random seed')
 
 # hyperparameter
 parser.add_argument('--batch_size', type=int, default=128, help='batch size of training')
@@ -52,6 +53,7 @@ parser.add_argument('--num_ensemble', type=int, default=1, help='number of ensem
 
 # dataset
 parser.add_argument('--dataset', type=str.lower, default='max', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100'], help='name of dataset')
+parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate for finetuning')
 parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
 parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
@@ -139,7 +141,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion, w
         if val_loader is None:
             best_model = deepcopy(model.state_dict())
             print('Saving models at {} epoch to {}'.format(epoch, model_dir))
-            if args.no_saving == False:
+            if args.saving == False:
                 torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
         else:
             with torch.no_grad():
@@ -190,7 +192,7 @@ def train(args, train_loader, val_loader, model, DEVICE, optimizer, criterion, w
                     min_val_loss = val_loss
                     best_model = deepcopy(model.state_dict())
                     print('Saving models and results at {} epoch to {}'.format(epoch, model_dir))
-                    if args.no_saving == False:  
+                    if args.saving == False:  
                         torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, model_dir)
                     logging_table.to_csv(os.path.join(args.model_dir_name, args.model_name + '_predictions_val.csv'), index=False)
 
@@ -269,10 +271,11 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
 # Main function
 #######################
 if __name__ == '__main__':
-    torch.manual_seed(10)
-    np.random.seed(10)
-    
+
     args = parser.parse_args()
+
+    torch.manual_seed(args.random_seed)
+    np.random.seed(args.random_seed)
 
     # Load args from json if json is passed
     if args.json_load.endswith(".json") and os.path.isfile(args.json_load):
@@ -309,7 +312,7 @@ if __name__ == '__main__':
         os.makedirs(args.logdir)
 
     
-    if args.no_saving == False:
+    if args.saving == False:
         os.makedirs(args.model_dir_name, exist_ok=True)
 
     
@@ -348,9 +351,9 @@ if __name__ == '__main__':
         elif args.backbone == 'LSTM':
             model = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=False)
         elif args.backbone == 'AE':
-            model = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
+            model = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, embdedded_size=128,n_channels_out=args.n_feature, backbone=False)
         elif args.backbone == 'CNN_AE':
-            model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, input_size=args.input_length, backbone=False)
+            model = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, embdedded_size=128, n_channels_out=args.n_feature, input_size=args.input_length, backbone=False)
         elif args.backbone == 'Transformer':
             model = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
         elif args.backbone == "CorNET":
@@ -424,9 +427,9 @@ if __name__ == '__main__':
     elif args.backbone == 'LSTM':
         model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=False)
     elif args.backbone == 'AE':
-        model_test = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=False)
+        model_test = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, embdedded_size=128,n_channels_out=args.n_feature, backbone=False)
     elif args.backbone == 'CNN_AE':
-        model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, out_channels=128, backbone=False)
+        model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, embdedded_size=128, n_channels_out=args.n_feature, input_size=args.input_length, backbone=False)
     elif args.backbone == 'Transformer':
         model_test = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=False)
     elif args.backbone == "CorNET":

@@ -44,6 +44,8 @@ def gen_aug(sample, ssh_type):
         return ifft_amp_phase_pert(sample)
     elif ssh_type == 'ap_f':
         return ifft_amp_phase_pert_fully(sample)
+    elif ssh_type == 'bioglass':
+        return torch.from_numpy(bioglass(sample))
     else:
         print('The task is not available!\n')
 
@@ -284,3 +286,25 @@ def ifft_amp_phase_pert_fully(sample):
     ifft = torch.squeeze(torch.real(torch.fft.ifftn(torch.fft.ifftshift(cmp), dim=(-2, -1))).reshape([bs, c, h, w]))
 
     return ifft
+
+
+def bioglass(sample, fs=100):
+    # https://ieeexplore.ieee.org/document/7015908
+
+    dimensions = sample.shape
+
+    detrend_window_size = int(3 * fs)
+
+    sample = sample - np.apply_along_axis(scipy.signal.convolve, 1, sample, np.ones(detrend_window_size) / detrend_window_size, mode='same')
+    sos = scipy.signal.butter(4, [4, 11], 'bandpass', fs=fs, output='sos')
+    sample = scipy.signal.sosfiltfilt(sos, sample, axis=1)
+
+    
+    sample = np.linalg.norm(sample, axis=2)
+
+    filter_sos = scipy.signal.butter(2, [0.5, 2.0], 'bandpass', fs=fs, output='sos')
+    sample = scipy.signal.sosfiltfilt(filter_sos, sample, axis=1)
+
+    sample = np.stack([sample]*dimensions[2], axis=2)
+
+    return sample
