@@ -6,6 +6,7 @@ from config import results_dir
 from utils import get_free_gpu
 
 
+
 wandb.login()
 
 # Parse command line arguments
@@ -15,7 +16,8 @@ parser.add_argument('--cuda', default=-1, type=int, help='cuda device ID，0/1')
 parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
 parser.add_argument('--random_seed', default=10, type=int, help='random seed')
 parser.add_argument('--pretrain', default=0, type=int, help='if or not to pretrain')
-parser.add_argument('--finetune', type=bool, default=True, help='if or not to finetune')
+parser.add_argument('--finetune', type=int, default=1, help='if or not to finetune')
+
 
 # hyperparameter
 parser.add_argument('--pretrain_batch_size', type=int, default=128, help='batch size of pretraining')
@@ -27,7 +29,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight dec
 parser.add_argument('--weight_decay_pretrain', type=float, default=1e-7, help='weight decay for pretrain')
 parser.add_argument('--scheduler', type=bool, default=False, help='if or not to use a scheduler')
 parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam'], help='optimizer')
-parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh', 'CrossEntropy'], help='loss function')
+parser.add_argument('--loss', type=str, default='Huber', choices=['MSE', 'MAE', 'Huber', 'LogCosh', 'CrossEntropy'], help='loss function')
 parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
 # dataset
@@ -35,10 +37,12 @@ parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices
 parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
 parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
 parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100'], help='name of dataset for finetuning')
-parser.add_argument('--discretize_hr', type=bool, default=False, help='if or not to discretize heart rate')
+parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn"], help='which method to use to output a probability distribution')
+parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
 parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')
 parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
+parser.add_argument('--n_prob_class', type=int, default=64, help='number of class for probability distribution')
 parser.add_argument('--split', type=int, default=0, help='split number')
 parser.add_argument('--hr_min', type=float, default=20, help='minimum heart rate for training, not needed for pretraining')
 parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rate for training, not needed for pretraining')
@@ -67,6 +71,11 @@ parser.add_argument('--p', type=int, default=128,
 parser.add_argument('--phid', type=int, default=128,
                     help='byol: projector hidden size, simsiam: predictor hidden size, simclr: na')
 
+# postprocessing
+parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg'], help='postprocessing method')
+parser.add_argument('--transition_distribution', type=str, default='gauss', choices=['gauss', 'laplace'], help='transition distribution for belief ppg')
+
+
 # log
 parser.add_argument('--logdir', type=str, default='log/', help='log directory')
 parser.add_argument('--wandb_mode', type=str, default='online', choices=['offline', 'online', 'disabled', 'dryrun', 'run'],  help='wandb mode')
@@ -90,49 +99,49 @@ parser.add_argument('--temp_unit', type=str, default='tsfm', choices=['tsfm', 'l
 # plot
 parser.add_argument('--plt', type=bool, default=False, help='if or not to plot results')
 
+#saving arguments
+parser.add_argument('--save_probabilities', type=bool, default=True, help='if or not to save probabilities')
+
 
 if __name__ == '__main__':
 
+    ############################################################################################################
+    ############################ CONFIGURATION #################################################################
+    ############################################################################################################
     args = parser.parse_args()
-    
-    if args.lr_finetune_lstm == -1:
-        args.lr_finetune_lstm = args.lr_finetune_backbone
 
     torch.manual_seed(args.random_seed)
     np.random.seed(args.random_seed)
 
-    # Set device
+    # Set device, automatically select a free GPU if available and cuda == -1
     if args.cuda == -1:
         args.cuda = int(get_free_gpu())
         print(f"Automatically selected GPU {args.cuda}")
 
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
+    # setup model, optimizer, scheduler, criterion, logger
+    model, optimizers, schedulers, criterion, logger = setup(args, DEVICE)
     
-    
-    if args.pretrain:
-        train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=True)
-        print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
-    else:
-        train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=False)
-        print('device:', DEVICE, 'dataset:', args.dataset)
-    model, optimizers, schedulers, criterion, logger, classifier, criterion_cls, optimizer_cls = setup(args, DEVICE)
-
-    #wandb.watch(model, log='all')
-
+    # set model saving paths and saves config file
     args.model_dir_name = os.path.join(results_dir, args.model_name)
     os.makedirs(args.model_dir_name, exist_ok=True)
     with open(os.path.join(args.model_dir_name, "config.json"), "w") as outfile:
         print(f"Saving config file to {args.model_dir_name}")
         json.dump(vars(args), outfile)
 
+    ############################################################################################################
+    ############################ PRETRAINING ###################################################################
+    ############################################################################################################
 
     if args.pretrain: # pretraining
+        # setup dataloader for pretraining
+        train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=True)
+        print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
         pretrain_model_weights = train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
-        pretrain_model, _ = setup_model_optm(args, DEVICE, classifier=False)
-        pretrain_model.load_state_dict(pretrain_model_weights)
+        model.load_state_dict(pretrain_model_weights)
 
         if len(test_loader) != 0:
-            test(test_loader, pretrain_model, logger, DEVICE, criterion, args)
+            test(test_loader, model, logger, DEVICE, criterion, args)
 
     else: # no pretraining, load previously trained model
         if args.framework == 'supervised':
@@ -143,29 +152,57 @@ if __name__ == '__main__':
             pretrain_model_weights = load_best_model(args)
             model.load_state_dict(pretrain_model_weights)
 
-        pretrain_model = model
+    pretrain_model = model
 
 
-
-    
+    ############################################################################################################
+    ############################ FINETUNING ####################################################################
     ############################################################################################################
 
+    trained_backbone = extract_backbone(pretrain_model, args)
+    classifier, criterion_cls, optimizer_cls  = setup_classifier(args, DEVICE, trained_backbone)
+
     if args.finetune:
-   
-        if args.pretrain:
-            train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=False)
-            print('device:', DEVICE, 'dataset:', args.dataset)
-        trained_backbone = extract_backbone(pretrain_model, args)
+
+        # setup dataloader for finetuning
+        train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=False, sample_sequences=False, discrete_hr=args.discretize_hr)
+        print('device:', DEVICE, 'dataset:', args.dataset)
+        
 
         trained_backbone.set_classification_head(classifier)
         optimizer_cls.param_groups[0]['lr'] = args.lr_finetune_backbone
         optimizer_cls.param_groups[1]['lr'] = args.lr_finetune_lstm
         optimizer_cls.add_param_group({'params': trained_backbone.classifier.parameters(), 'lr': args.lr})
         
-        #wandb.watch(trained_backbone, log='all')
-        best_lincls = train_lincls(train_loaders, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, args)
+        trained_backbone_weights = train_lincls(train_loaders, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, args)
+        trained_backbone.load_state_dict(trained_backbone_weights)
+
         if len(test_loader) != 0:
-            test_lincls(test_loader, trained_backbone, best_lincls, logger, DEVICE, criterion_cls, args, plt=args.plt)
+            test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion_cls, args, plt=args.plt)
+
+    else:
+        classifier = setup_linclf(args, DEVICE, trained_backbone.out_dim)
+        trained_backbone.set_classification_head(classifier)
+        trained_backbone_weights = load_best_lincls(args)
+        trained_backbone.load_state_dict(trained_backbone_weights)
+
+    ############################################################################################################
+    ############################ POSTPROCESSING ################################################################
+    ############################################################################################################
+
+    if args.postprocessing != 'none':
+
+        train_loader, val_loader, test_loader = setup_dataloaders(args, pretrain=False, sample_sequences=True, discrete_hr=True)
+        trained_backbone = add_probability_wrapper(trained_backbone, args, DEVICE)
+        postprocessing_model = setup_postprocessing_model(args)
+
+        postprocessing_model = train_postprocessing(train_loader, postprocessing_model, DEVICE, args)
+
+        test_postprocessing(val_loader, trained_backbone, postprocessing_model,  logger, DEVICE, criterion_cls, args, plt=args.plt, prefix='Val')
+        test_postprocessing(test_loader, trained_backbone, postprocessing_model, logger, DEVICE, criterion_cls, args, plt=args.plt, prefix='Test')
+        
+
+
 
     # remove saved intermediate models
     delete_files(args)

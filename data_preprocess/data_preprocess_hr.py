@@ -57,21 +57,66 @@ def normalize_samples(data):
     else:
         return data
     
-def discretize_hr(y, n_bins:int=64):
+def generate_batch_sequences(x, y, pid, time_diff=8):
+
+    # Generates batches of the given data
+    # Always puts consecutive samples from the same subject into the same batch
+    # Uses the subject id and starting time from pid for batching
+    # Because we don't know what's the general time difference between samples from the same subject, we infer it from the data
+
+    diffs = np.unique(np.diff(pid[:,1]), return_counts=True)
+    most_frequent_diff = diffs[0][np.argmax(diffs[1])]
+
+    indices = []
+    time_diff = most_frequent_diff
+    current_sub = None
+    current_start_time = None
+    current_indices = []
+    for i in range(len(pid)):
+        sub, start_time = pid[i][0], pid[i][1]
+        if current_sub != sub or abs(start_time - current_start_time) != time_diff:
+
+            if len(current_indices) > 0:
+                indices.append(np.array(current_indices))
+
+            current_indices = [i]
+            current_sub = sub
+            current_start_time = start_time
+        else:
+            current_indices.append(i)
+            current_start_time = start_time
+
+    x = [x[i] for i in indices]
+    y = [y[i] for i in indices]
+    pid = [pid[i] for i in indices]
+
+    return x, y, pid
+
+    
+    
+def discretize_hr(y, hr_min, hr_max, n_bins:int=64, sigma=1.5):
     """
     Discretizes a continuous heartrate value into a one-hot encoding.
     Assumes that alle y values are in the range [0,1]
     Values outside this range will be put into the first or last bin.
     Outputs a shape (n_samples, n_bins) array.
     """
+    def gaussian(x, mu, sig):
+        return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
+
+    hr_range = hr_max - hr_min
+
+    y = np.clip(y,-sigma/hr_range*3, 1 + sigma/hr_range*3)
+
     bins = np.linspace(0, 1, n_bins-1)
-    # digitize values to get discrete values
-    digitized = np.digitize(y, bins).reshape(-1)
-    # creates one-hot encoding of discrete values
-    y_onehot = np.eye(n_bins)[digitized]
+    bin_values = np.concatenate([[bins[0]], (bins[1:] + bins[:-1])/2 , [bins[-1]]])
+    # creates discrete distributions of hr values
+    y_discretized = np.array([gaussian(bin_values , x, sigma/hr_range) for x in y])
+
+    y_discretized = y_discretized / y_discretized.sum(axis=1, keepdims=True)
 
 
-    return y_onehot
+    return y_discretized
 
 def norm_hr(y, hr_min, hr_max):
     """
@@ -231,7 +276,7 @@ def load_data_no_labels(data_path, split:int=0, subsample=1.0, reconstruction=Fa
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
-def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.0, reconstruction=False):
+def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.0, reconstruction=False, sample_sequences:bool=False, discrete_hr:bool=False):
     if dataset is None:
         dataset = args.dataset
     if split is None:
@@ -278,21 +323,35 @@ def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.
         y_val = norm_hr(y_val, args.hr_min, args.hr_max)
         y_test = norm_hr(y_test, args.hr_min, args.hr_max)
 
-    if args.discretize_hr and not reconstruction:
-        y_train = discretize_hr(y_train, n_bins=args.n_class)
-        y_val = discretize_hr(y_val, n_bins=args.n_class)
-        y_test = discretize_hr(y_test, n_bins=args.n_class)
+    if discrete_hr and not reconstruction:
+        sigma = args.label_sigma
+        y_train = discretize_hr(y_train, hr_min = args.hr_min, hr_max = args.hr_max, n_bins=args.n_prob_class, sigma=sigma)
+        y_val = discretize_hr(y_val, hr_min = args.hr_min, hr_max = args.hr_max, n_bins=args.n_prob_class, sigma=sigma)
+        y_test = discretize_hr(y_test, hr_min = args.hr_min, hr_max = args.hr_max, n_bins=args.n_prob_class, sigma=sigma)
 
+    if sample_sequences:
+        x_train, y_train, d_train = generate_batch_sequences(x_train, y_train, d_train)
+        x_val, y_val, d_val = generate_batch_sequences(x_val, y_val, d_val)
+        x_test, y_test, d_test = generate_batch_sequences(x_test, y_test, d_test)
 
+        train_set = data_loader_hr(x_train, y_train, d_train)
+        train_loader = DataLoader(train_set, batch_size=None, drop_last=False, batch_sampler=None, num_workers=args.num_workers, pin_memory=True, shuffle=True)
 
-    train_set = data_loader_hr(x_train, y_train, d_train)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, num_workers=args.num_workers, pin_memory=True, shuffle=True)
+        test_set = data_loader_hr(x_test, y_test, d_test)
+        test_loader = DataLoader(test_set, batch_size=None, batch_sampler=None, shuffle=False)
 
-    test_set = data_loader_hr(x_test, y_test, d_test)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
+        val_set = data_loader_hr(x_val, y_val, d_val)
+        val_loader = DataLoader(val_set, batch_size=None, batch_sampler=None, shuffle=False)
+        
+    else:
+        train_set = data_loader_hr(x_train, y_train, d_train)
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=True, num_workers=args.num_workers, pin_memory=True, shuffle=True)
 
-    val_set = data_loader_hr(x_val, y_val, d_val)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
+        test_set = data_loader_hr(x_test, y_test, d_test)
+        test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
+
+        val_set = data_loader_hr(x_val, y_val, d_val)
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
 
     print(f"Number of batches in train_loader: {len(train_loader)}")
     print(f"Number of batches in val_loader: {len(val_loader)}")

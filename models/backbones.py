@@ -5,6 +5,7 @@ from .attention import *
 from .MMB import *
 import matplotlib.pyplot as plt
 import os
+import numpy as np
 
 class FCN(nn.Module):
     def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
@@ -101,7 +102,7 @@ class CorNET(nn.Module):
             self.classifier = nn.Linear(LSTM_units, n_classes) 
 
     def forward(self, x):
-        self.lstm.flatten_parameters()
+        #self.lstm.flatten_parameters()
         x = x.permute(0, 2, 1)
         x = self.conv1(x)
         x = self.maxpool1(x)
@@ -131,49 +132,6 @@ class CorNET(nn.Module):
         self.classifier = classifier
         self.backbone = False
 
-    def plot_layers(self, x, plot_dir):
-
-        def plot_save(x, plot_dir, name):
-            x = x.detach().cpu().numpy()
-
-            if len(x.shape) == 1:
-                x = x.reshape(1, -1)
-
-            plt.figure()
-            for i in range(x.shape[0]):
-                plt.plot(x[i,:])
-            plt.savefig(os.path.join(plot_dir, name))
-            plt.close()
-
-        self.lstm.flatten_parameters()
-        x = x.permute(0, 2, 1)
-        plot_save(x[0, 0, :], plot_dir, 'input.png')
-        x = self.conv1(x)
-        x = self.maxpool1(x)
-        x = self.dropout(x)
-        plot_save(x[0, 0, :], plot_dir, 'conv1.png')
-        x = self.conv2(x)
-        x = self.maxpool2(x)
-        x = self.dropout(x)
-        plot_save(x[0, 0, :], plot_dir, 'conv2.png')
-        x = x.permute(2, 0, 1)
-        # shape is (L, N, H_in)
-        # L - seq_len, N - batch_size, H_in - input_size
-        # L = 19
-        # N = 64
-        # H_in = 32
-        x = x.reshape(x.shape[0], x.shape[1], -1)
-
-
-        x, h = self.lstm(x)
-        x = x[-1, :, :]
-        plot_save(x[0, :], plot_dir, 'lstm.png')
-
-        if self.backbone:
-            return None, x
-        else:
-            out = self.classifier(x)
-            return out, x
 
 
 class DeepConvLSTM(nn.Module):
@@ -530,15 +488,104 @@ class LSTM_Classifier(nn.Module):
 class Classifier(nn.Module):
     def __init__(self, bb_dim, n_classes):
         super(Classifier, self).__init__()
+        self.n_classes = n_classes
 
         self.classifier = nn.Linear(bb_dim, n_classes)
+
+        if self.n_classes > 1:
+            # add softmax layer
+            self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         x = x.reshape(x.shape[0], -1)
         out = self.classifier(x)
 
+        if self.n_classes > 1:
+            out = self.softmax(out)
+
         return out
 
+class Final_Model(nn.Module):
+    def __init__(self, backbone, postprocessing = None):
+        super(Final_Model, self).__init__()
+        self.backbone = backbone
+        self.postprocessing = postprocessing
+
+    def forward(self, x, method=None):
+        out, x = self.backbone(x)
+        if self.postprocessing is not None:
+            out, uncertainty = self.postprocessing(out, method=method)
+        return out, uncertainty
+
+class Uncertainty_Wrapper(nn.Module):
+    def __init__(self, base_model, n_classes):
+        super(Uncertainty_Wrapper, self).__init__()
+
+        if hasattr(base_model, 'classifier'):
+            self.classifier = base_model.classifier
+        if hasattr(base_model, 'backbone'):
+            self.backbone = base_model.backbone
+
+        self.base_model = base_model
+        self.n_classes = n_classes
+        self.bins = np.array([-np.inf] + list(np.linspace(0, 1, n_classes-1)) + [np.inf])
+
+    def forward(self, x):
+
+        out, feat = self.base_model(x)
+        #probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out))
+
+        return out, feat
+
+
+class MC_Dropout_Wrapper(Uncertainty_Wrapper):
+    def __init__(self, base_model, n_classes=64, n_samples=100):
+        super(MC_Dropout_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes)
+
+        self.n_samples = n_samples
+
+
+    def forward(self, x):
+
+        out, feat = self.base_model(x)
+        # Enable dropout during inference
+        self.train()
+        out_samples = []
+        for _ in range(self.n_samples):
+            
+            
+            out_sample, _ = self.base_model(x)
+            out_samples.append(out_sample)
+
+        # Stack the results along a new dimension
+        out_samples = torch.cat(out_samples, dim=1).cpu().numpy()
+
+        # Calculate mean and uncertainty
+        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
+        probs = probs.to(x.device)
+        return probs, feat
+        
+
+class BNN_Wrapper(Uncertainty_Wrapper):
+    def __init__(self, base_model, n_classes=64, n_samples=100):
+        super(BNN_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes)
+        
+        self.n_samples = n_samples
+
+    def forward(self, x):
+        out_samples = []
+        for _ in range(self.n_samples):
+            
+            out_sample, _ = self.base_model(x)
+            out_samples.append(out_sample)
+
+        # Stack the results along a new dimension
+        out_samples = torch.cat(out_samples, dim=1).cpu().numpy()
+
+        # Calculate mean and uncertainty
+        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
+        probs = probs.to(x.device)
+        return probs, feat
 
 class Projector(nn.Module):
     def __init__(self, model, bb_dim, prev_dim, dim):
@@ -1189,3 +1236,81 @@ def weight_init(self, mode="fan_out", nonlinearity="relu"):
 
 
             
+from bayesian_torch.layers.variational_layers.conv_variational import Conv1dReparameterization
+from bayesian_torch.layers.variational_layers.linear_variational import LinearReparameterization
+from bayesian_torch.layers.variational_layers.rnn_variational import LSTMReparameterization
+
+
+
+class BayesianCorNET(nn.Module):
+    # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
+    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True):
+        super(BayesianCorNET, self).__init__()
+        # vector size after a convolutional layer is given by:
+        # (input_size - kernel_size + 2 * padding) / stride + 1
+        
+        self.activation = nn.ELU()
+        self.backbone = backbone
+        self.n_classes = n_classes
+        self.dropout = nn.Dropout(0.1)
+        self.conv1 = nn.Sequential(Conv1dReparameterization(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.conv1[0].dnn_to_bnn_flag = True
+        self.maxpool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+        out_len = (input_size - kernel_size + 2 * 0) // 1 + 1
+        out_len = (out_len - 4 + 2 * 0) // 4 + 1
+        self.conv2 = nn.Sequential(Conv1dReparameterization(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.conv2[0].dnn_to_bnn_flag = True
+        self.maxpool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+                                         
+        out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
+        self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
+        # should be 50 with default parameters
+
+        self.lstm1 = LSTMReparameterization(in_features=conv_kernels, out_features=LSTM_units)
+        self.lstm2 = LSTMReparameterization(in_features=LSTM_units, out_features=LSTM_units)
+        self.lstm1.dnn_to_bnn_flag = True
+        self.lstm2.dnn_to_bnn_flag = True
+        self.out_dim = LSTM_units
+
+        if backbone == False:
+            self.classifier = LinearReparameterization(LSTM_units, n_classes) 
+            self.classifier.dnn_to_bnn_flag = True
+            
+    def forward(self, x):
+        #self.lstm.flatten_parameters()
+        x = x.permute(0, 2, 1)
+        x = self.conv1(x)
+        x = self.maxpool1(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = self.maxpool2(x)
+        x = self.dropout(x)
+        x = x.permute(2, 0, 1)
+        # shape is (L, N, H_in)
+        # L - seq_len, N - batch_size, H_in - input_size
+        # L = 19
+        # N = 64
+        # H_in = 32
+        x = x.reshape(x.shape[1], x.shape[0], -1)
+
+
+        x, h = self.lstm1(x)
+        h = (h[0][:,-1,:], h[1][:,-1,:])
+        x, h = self.lstm2(x, h)
+        x = x[:, -1, :]
+
+        if self.backbone:
+            return None, x
+        else:
+            out = self.classifier(x)
+            return out, x
+
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
