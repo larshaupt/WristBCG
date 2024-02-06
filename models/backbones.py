@@ -102,7 +102,7 @@ class CorNET(nn.Module):
             self.classifier = nn.Linear(LSTM_units, n_classes) 
 
     def forward(self, x):
-        #self.lstm.flatten_parameters()
+        self.lstm.flatten_parameters()
         x = x.permute(0, 2, 1)
         x = self.conv1(x)
         x = self.maxpool1(x)
@@ -471,10 +471,11 @@ class Transformer(nn.Module):
         self.backbone = False
 
 class LSTM_Classifier(nn.Module):
-    def __init__(self, bb_dim, n_classes):
+    def __init__(self, bb_dim, n_classes, hidden_size=128):
         super(LSTM_Classifier, self).__init__()
         self.n_classes = n_classes
-        self.hidden_size, self.input_length = bb_dim
+        self.hidden_size = hidden_size
+        self.input_length = bb_dim[1]
         self.lstm = nn.LSTM(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2)
         self.classifier = nn.Linear(self.hidden_size, self.n_classes)
 
@@ -553,7 +554,6 @@ class MC_Dropout_Wrapper(Uncertainty_Wrapper):
         out_samples = []
         for _ in range(self.n_samples):
             
-            
             out_sample, _ = self.base_model(x)
             out_samples.append(out_sample)
 
@@ -585,7 +585,7 @@ class BNN_Wrapper(Uncertainty_Wrapper):
         # Calculate mean and uncertainty
         probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
         probs = probs.to(x.device)
-        return probs, feat
+        return probs, None
 
 class Projector(nn.Module):
     def __init__(self, model, bb_dim, prev_dim, dim):
@@ -1239,49 +1239,87 @@ def weight_init(self, mode="fan_out", nonlinearity="relu"):
 from bayesian_torch.layers.variational_layers.conv_variational import Conv1dReparameterization
 from bayesian_torch.layers.variational_layers.linear_variational import LinearReparameterization
 from bayesian_torch.layers.variational_layers.rnn_variational import LSTMReparameterization
+from bayesian_torch.models.dnn_to_bnn import bnn_conv_layer, bnn_linear_layer
 
 
+class IdentityLayer(nn.Module):
+    def __init__(self):
+        super(IdentityLayer, self).__init__()
+
+    def forward(self, *args):
+        return args
 
 class BayesianCorNET(nn.Module):
     # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
-    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True):
+    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True, bayesian_layers="all", state_dict=None):
         super(BayesianCorNET, self).__init__()
         # vector size after a convolutional layer is given by:
         # (input_size - kernel_size + 2 * padding) / stride + 1
-        
+        self.bayesian_layers = bayesian_layers
         self.activation = nn.ELU()
         self.backbone = backbone
         self.n_classes = n_classes
         self.dropout = nn.Dropout(0.1)
-        self.conv1 = nn.Sequential(Conv1dReparameterization(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+
+        
+
+        self.conv1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
                                          nn.BatchNorm1d(conv_kernels),
                                          self.activation
                                          )
-        self.conv1[0].dnn_to_bnn_flag = True
         self.maxpool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
         out_len = (input_size - kernel_size + 2 * 0) // 1 + 1
         out_len = (out_len - 4 + 2 * 0) // 4 + 1
-        self.conv2 = nn.Sequential(Conv1dReparameterization(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+        self.conv2 = nn.Sequential(nn.Conv1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
                                          nn.BatchNorm1d(conv_kernels),
                                          self.activation
                                          )
-        self.conv2[0].dnn_to_bnn_flag = True
         self.maxpool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
                                          
         out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
         self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
         # should be 50 with default parameters
 
-        self.lstm1 = LSTMReparameterization(in_features=conv_kernels, out_features=LSTM_units)
-        self.lstm2 = LSTMReparameterization(in_features=LSTM_units, out_features=LSTM_units)
-        self.lstm1.dnn_to_bnn_flag = True
-        self.lstm2.dnn_to_bnn_flag = True
+        if self.bayesian_layers in ["all"]:
+            self.lstm = LSTMReparameterization(in_features=conv_kernels, out_features=LSTM_units)
+            self.lstm2 = LSTMReparameterization(in_features=LSTM_units, out_features=LSTM_units)
+            self.lstm.dnn_to_bnn_flag = True
+            self.lstm2.dnn_to_bnn_flag = True
+        else:
+            self.lstm = nn.LSTM(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2, batch_first=True)
+            # the first layer already has two layers
+            self.lstm2 = IdentityLayer()
+
         self.out_dim = LSTM_units
 
         if backbone == False:
-            self.classifier = LinearReparameterization(LSTM_units, n_classes) 
-            self.classifier.dnn_to_bnn_flag = True
+            self.classifier = Classifier(LSTM_units, n_classes)
+
+        if state_dict is not None:
+            self.load_state_dict(state_dict, strict=False)
+
+        self.const_bnn_prior_parameters = {
+                "prior_mu": 0.0,
+                "prior_sigma": 1.0,
+                "posterior_mu_init": 0.0,
+                "posterior_rho_init": -3.0,
+                "type": "Reparameterization",  # Flipout or Reparameterization
+                "moped_enable": True,  # True to initialize mu/sigma from the pretrained dnn weights
+                "moped_delta": 0.5,
+        }
+
+        if self.bayesian_layers in ["all", "first", "first_last"]:
+            self.conv1[0] = bnn_conv_layer(self.const_bnn_prior_parameters, self.conv1[0])
+
+
+        if self.bayesian_layers in ["all"]:
+            self.conv2[0] = bnn_conv_layer(self.const_bnn_prior_parameters, self.conv2[0])
+
+        if backbone == False and self.bayesian_layers in ["all", "last", "first_last"]:
+            self.classifier.classifier = bnn_linear_layer(self.const_bnn_prior_parameters, self.classifier.classifier)
             
+
+
     def forward(self, x):
         #self.lstm.flatten_parameters()
         x = x.permute(0, 2, 1)
@@ -1291,16 +1329,11 @@ class BayesianCorNET(nn.Module):
         x = self.conv2(x)
         x = self.maxpool2(x)
         x = self.dropout(x)
-        x = x.permute(2, 0, 1)
-        # shape is (L, N, H_in)
-        # L - seq_len, N - batch_size, H_in - input_size
-        # L = 19
-        # N = 64
-        # H_in = 32
-        x = x.reshape(x.shape[1], x.shape[0], -1)
+        x = x.permute(0, 2, 1)
 
+        # X input should be (batch_size, seq_len, input_size)
 
-        x, h = self.lstm1(x)
+        x, h = self.lstm(x)
         h = (h[0][:,-1,:], h[1][:,-1,:])
         x, h = self.lstm2(x, h)
         x = x[:, -1, :]
@@ -1314,3 +1347,10 @@ class BayesianCorNET(nn.Module):
     def set_classification_head(self, classifier):
         self.classifier = classifier
         self.backbone = False
+
+        if self.bayesian_layers in ["all", "last", "first_last"]:
+            # transforms the classification layer into a bayesian layer
+            try:
+                self.classifier.classifier = bnn_linear_layer(self.const_bnn_prior_parameters, self.classifier.classifier).to(next(self.parameters()).device)
+            except:
+                print("Could not transform the classification layer into a bayesian layer")

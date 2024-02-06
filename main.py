@@ -33,13 +33,15 @@ parser.add_argument('--loss', type=str, default='Huber', choices=['MSE', 'MAE', 
 parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
 # dataset
-parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'apple100'], help='name of dataset')
+parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'apple100', 'parkinson100'], help='name of dataset')
 parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
 parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
-parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100'], help='name of dataset for finetuning')
-parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn"], help='which method to use to output a probability distribution')
+parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100'], help='name of dataset for finetuning')
+parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast"], help='which method to use to output a probability distribution')
 parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
 parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')
+parser.add_argument('--subsample_ranked_train', type=float, default=0.0, help='amount of data to use for training, 0.0 means default dataset')
+parser.add_argument('--subsample_ranked_val', type=float, default=0.0, help='amount of data to use for validation and testing,  0.0 means default dataset')
 parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
 parser.add_argument('--n_class', type=int, default=1, help='number of class')
 parser.add_argument('--n_prob_class', type=int, default=64, help='number of class for probability distribution')
@@ -114,19 +116,20 @@ if __name__ == '__main__':
     np.random.seed(args.random_seed)
 
     # Set device, automatically select a free GPU if available and cuda == -1
-    if args.cuda == -1:
+    if args.cuda == -1 or True:
         args.cuda = int(get_free_gpu())
         print(f"Automatically selected GPU {args.cuda}")
 
+    
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
     # setup model, optimizer, scheduler, criterion, logger
     model, optimizers, schedulers, criterion, logger = setup(args, DEVICE)
-    
-    # set model saving paths and saves config file
-    args.model_dir_name = os.path.join(results_dir, args.model_name)
-    os.makedirs(args.model_dir_name, exist_ok=True)
-    with open(os.path.join(args.model_dir_name, "config.json"), "w") as outfile:
-        print(f"Saving config file to {args.model_dir_name}")
+
+
+    # save config file
+    config_file = os.path.join(args.lincl_model_file.replace("bestmodel.pt", "config.json"))
+    with open(config_file, "w") as outfile:
+        print(f"Saving config file to {config_file}")
         json.dump(vars(args), outfile)
 
     ############################################################################################################
@@ -180,7 +183,7 @@ if __name__ == '__main__':
         if len(test_loader) != 0:
             test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion_cls, args, plt=args.plt)
 
-    else:
+    elif args.postprocessing != 'none':
         classifier = setup_linclf(args, DEVICE, trained_backbone.out_dim)
         trained_backbone.set_classification_head(classifier)
         trained_backbone_weights = load_best_lincls(args)
@@ -192,7 +195,7 @@ if __name__ == '__main__':
 
     if args.postprocessing != 'none':
 
-        train_loader, val_loader, test_loader = setup_dataloaders(args, pretrain=False, sample_sequences=True, discrete_hr=True)
+        train_loader, val_loader, test_loader = setup_dataloaders(args, pretrain=False, sample_sequences=True, discrete_hr=True, sigma=3)
         trained_backbone = add_probability_wrapper(trained_backbone, args, DEVICE)
         postprocessing_model = setup_postprocessing_model(args)
 

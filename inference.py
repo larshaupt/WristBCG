@@ -17,7 +17,7 @@ from argparse import Namespace
 
 #%%
 
-json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/config.json"
+json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_simsiam_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.0_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/config.json"
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_AE_pretrain_max_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm/config.json"
 with open(json_file) as json_file:
     json_args = json.load(json_file)
@@ -41,7 +41,7 @@ elif mode == "supervised":
     model_weights_path = os.path.join(args.model_dir_name, args.model_name + '_model.pt')
 args.batch_size = 1
 args.cuda = 3
-
+args.dataset = "apple100"
 # %%
 # Testing
 #######################
@@ -88,7 +88,7 @@ class AE(nn.Module):
         else:
             out = self.classifier(x_encoded)
             return out, x_decoded
-
+#%%
 # Initialize and load test model
 if args.backbone == 'FCN':
     model_test = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=True)
@@ -123,13 +123,11 @@ elif mode == "pretrain":
 model_test.load_state_dict(model_weights)
 model_test = model_test.to(DEVICE)
 
-
-
-# %%
+#%%
 
 X, Y, D, P = [], [], [], []
 
-for i, (x, y, d) in enumerate(val_loader):
+for i, (x, y, d) in enumerate(test_loader):
     x = x.to(DEVICE).float()
     y = y.to(DEVICE)
     d = d.to(DEVICE)
@@ -152,195 +150,285 @@ P = np.concatenate(P).squeeze()
 P = P*(args.hr_max - args.hr_min) + args.hr_min
 Y = Y*(args.hr_max - args.hr_min) + args.hr_min
 
+
+#%%
+
+corr = np.corrcoef(Y, P)[0,1]
+mae = np.mean(np.abs(Y-P))
+rmse = np.sqrt(np.mean((Y-P)**2))
+print(f"Correlation: {corr}")
+print(f"MAE: {mae}")
+print(f"RMSE: {rmse}")
+
+
+#%%
+
+df_res = pandas.DataFrame({"Y": Y, 
+                           "P": P, 
+                           "sub": [el[0] for el in D],
+                            "time": [el[1] for el in D], 
+                           "X": [el for el in X]})
+#%%
+subjects_mapping = {53.0: "5",
+                    549511850: "6_v2",
+                    509511850: "2_v2"}
+
+#df_res["sub"] = df_res["sub"].map(subjects_mapping)
+
+subjects = df_res["sub"].unique()
+
+df_grouped = pd.concat([df_res.groupby("sub").apply(lambda x: x['Y'].corr(x['P'])), df_res.groupby("sub").apply(lambda x: np.mean(np.abs(x['Y']-x['P'])))], axis=1)
+df_grouped.columns = ["corr", "mae"]
+df_grouped
+
+# --> We see that the performance is different for different subjects in the test set.
+# --> We can also see that while the correlation is quite low, the MAE is quite high for each subject
+# --> We conclude that the dataset does not have enough variety in HR
+#%%
+# Look at average HR and HR predictions
+
+fig, axes = plt.subplots(2,3, figsize=(15,8), dpi=500, sharex=True)
+
+for i, sub in enumerate(subjects):
+
+    df_sub = df_res[df_res["sub"] == sub]
+    
+    df_sub["Y"].hist(ax=axes[0, i], label="Y", bins=100)
+    axes[0, i].set_title(f"Subject {sub} HR distribution")
+    df_sub["P"].hist(ax=axes[1, i], label="P", bins=100)
+    axes[1, i].set_title(f"Subject {sub} HR prediction distribution")
+    fig.tight_layout()
+
 # %%
-plt.scatter(Y,P, alpha=0.1)
-plt.plot([args.hr_min, args.hr_max],[args.hr_min, args.hr_max], color="red")
+# Look at HR and HR predictions over time
+fig, axes = plt.subplots(len(subjects),1, figsize=(8,15))
+for i, sub in enumerate(subjects):
+    df_sub = df_res[df_res["sub"] == sub]
+    #df_sub = df_sub.iloc[500:-500]
+    
+    df_sub["Y"].rolling(10).median().plot(ax=axes[i], label="Y")
+    df_sub["P"].rolling(10).median().plot(ax=axes[i], label="P")
+    axes[i].set_title(f"Subject {sub} HR over time")
+    axes[i].legend()
+    #print(df_sub[["Y", "P"]].corr().iloc[0,1])
+
+#%%
+# Look at best and worst predictions
+for i, sub in enumerate(subjects):
+    df_sub = df_res[df_res["sub"] == sub]
+    df_sub["diff"] = np.abs(df_sub["Y"] - df_sub["P"])
+    df_sub = df_sub.sort_values("diff", ascending=True)
+    fig, axes = plt.subplots(2,3, figsize=(15,5))
+    for i_best in range(3):
+        axes[0,i_best].plot(df_sub["X"].iloc[i_best])
+        axes[0,i_best].set_title(f"HR: {df_sub['Y'].iloc[i_best]:.1f}, Pred: {df_sub['P'].iloc[i_best]:.1f}")
+
+    for i_worst in range(3):
+        axes[1,i_worst].plot(df_sub["X"].iloc[-i_worst -1])
+        axes[1,i_worst].set_title(f"HR: {df_sub['Y'].iloc[-i_worst -1]:.1f}, Pred: {df_sub['P'].iloc[-i_worst -1]:.1f}")
+    fig.suptitle(f"Subject {sub} best and worst predictions")
+    fig.tight_layout()
+
+
 # %%
-mag = np.sqrt(X[:,:,0]**2 + X[:,:,1]**2 + X[:,:,2]**2)
-std = np.std(mag, axis=1)
-diff = np.abs(Y-P)
-# %%
-plt.plot(diff, std, 'o', alpha=0.1)
-# %%
-plt.plot(Y, diff, 'o', alpha=0.1)
+i = -8
+df_sub = df_res[df_res["sub"] == subjects[0]]
+df_sub["diff"] = np.abs(df_sub["Y"] - df_sub["P"])
+df_sub = df_sub.sort_values("diff", ascending=True)
+plt.plot(df_sub["X"].iloc[i])
+plt.xlabel("Time")
+plt.title(f"HR: {df_sub['Y'].iloc[i]:.1f}, Pred: {df_sub['P'].iloc[i]:.1f}")
 # %%
 
 
-X, Y, D, P = [], [], [], []
+import pickle
+def load_subjects(dataset_dir, subject_paths):
+    X, Y, pid, metrics = [], [], [], []
+    for sub in subject_paths:
+        with open(os.path.join(dataset_dir, sub), "rb") as f:
+            data = pickle.load(f)
+            if len(data) == 4:
+                X_sub, Y_sub, pid_sub, metrics_sub = data
+            else:
+                X_sub, Y_sub, pid_sub = data
+                metrics_sub = np.array([0] * len(Y_sub))
 
-for i, (x, y, d) in enumerate(val_loader):
-    x = x.to(DEVICE).float()
-    y = y.to(DEVICE)
-    d = d.to(DEVICE)
+        X.append(X_sub)
+        Y.append(Y_sub)
+        pid.append(pid_sub)
+        metrics.append(metrics_sub)
+
+    X = np.concatenate(X, axis=0)
+    Y = np.concatenate(Y, axis=0)
+    pid = np.concatenate(pid, axis=0)
+    metrics = np.concatenate(metrics, axis=0)
+
+    return X, Y, pid, metrics
+
+def load_dataset(dataset_dir, split, load_train=False):
+    # load split
+    split_file = os.path.join(dataset_dir, f'splits.json')
+
+    if not os.path.exists(split_file):
+        raise ValueError(f"Split file {split_file} does not exist")
+    
+    with open(split_file) as f:
+        splits = json.load(f)
+
+    split = splits[str(split)]
+
+
+    # load data
+    if load_train:
+        X_train, Y_train, pid_train, metrics_train = load_subjects(dataset_dir, split["train"])
+    X_val, Y_val, pid_val, metrics_val = load_subjects(dataset_dir, split["val"])
+    X_test, Y_test, pid_test, metrics_test = load_subjects(dataset_dir, split["test"])
+
+    if load_train:
+        return X_train, Y_train, pid_train, metrics_train, X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
+    else:
+        return X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
+    
+#%%
+data_dir = config.data_dir_Apple_processed_100hz_wmetrics
+X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(data_dir, 0)
+# %%
+
+
+
+X, Y, D, P, M = [], [], [], [], []
+# metrices are metric_avg, metric_max, metric_angle, metric_hr
+for i, (x, y, d, metric) in enumerate(zip(X_test, Y_test, pid_test, metrics_test)):
+    print(i)
+    if not (metric[0] < 0.08 and metric[1] < 0.5 and metric[2] < 5 and metric[3] < 40):
+       pass
+    x = torch.Tensor(x).unsqueeze(0).to(DEVICE).float()
+    # z normalize x
+    x = (x - x.mean()) / x.std()
+    y = torch.Tensor(np.array(y).reshape(1,-1)).to(DEVICE)
+    #d = torch.Tensor(d).to(DEVICE)
     p,_ = model_test(x)
     x = x.detach().cpu().numpy()
     y = y.detach().cpu().numpy()
-    d = d.detach().cpu().numpy()
+    #d = d.detach().cpu().numpy()
     p = p.detach().cpu().numpy()
     X.append(x)
     Y.append(y)
-    D.append(d)
-    P.append(p)
+    D.append(d.reshape(1,-1))
+    P.append(p.reshape(1,-1))
+    M.append(metric.reshape(1,-1))
 
     
 X = np.concatenate(X)
-Y = np.concatenate(Y)
+Y = np.concatenate(Y).squeeze()
 D = np.concatenate(D)
-P = np.concatenate(P)
+P = np.concatenate(P).squeeze()
+M = np.concatenate(M)
+
+P = P*(args.hr_max - args.hr_min) + args.hr_min
+#Y = Y*(args.hr_max - args.hr_min) + args.hr_min
 # %%
-i = 100
-plt.plot(P[i,:,0])
-plt.plot(X[i,:,0])
-# %%
+corr = np.corrcoef(Y, P)[0,1]
+mae = np.mean(np.abs(Y-P))
+#rmse = np.sqrt(np.mean((Y-P)**2))
+print(f"Correlation: {corr}")
+print(f"MAE: {mae}")
+#print(f"RMSE: {rmse}")
 
-
-# try monte carlo dropout
-preds_list = []
-for i, (x,y,d) in enumerate(val_loader):
-
-    if i < 300:
-        continue
-    print(i)
-    x = x.to(DEVICE).float()
-    y = y.to(DEVICE)
-    d = d.to(DEVICE)
-    n = 1000
-    x = x.repeat(1000,1,1)
-    y = y.repeat(1000,1)
-    d = d.repeat(1000,1)
-
-    model_test.train()
-    out, p = model_test(x)
-
-    preds = out.detach().cpu().numpy()
-    preds = preds * (args.hr_max - args.hr_min) + args.hr_min
-    preds_list.append(preds)
-
-    if i > 400:
-        break
 
 # %%
+# train a random forest to predict prediction error
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 
+error = np.abs(Y_test-P)
+m_train, m_test, err_train, err_test = train_test_split(M.reshape(-1,4), error, test_size=0.2, random_state=42)
+# %%
+m_train[np.isnan(m_train)] = 0
+estimator = RandomForestRegressor(n_estimators=100, random_state=42)
+estimator.fit(m_train, err_train)
+# %%
+err_pred = estimator.predict(m_test)
+mae = np.mean(np.abs(err_pred-err_test))
+plt.scatter(err_test, err_pred)
+# %%
+# find parameter importance
+importances = estimator.feature_importances_
+indices = np.argsort(importances)[::-1]
+# metrices are metric_avg, metric_max, metric_angle, metric_hr
+# %%
+# Print the feature ranking
+print("Feature ranking:")
+metric_names = ["metric_avg", "metric_max", "metric_angle", "metric_hr"]
+for f in range(m_train.shape[1]):
+    print(f"{f+1}. feature {metric_names[indices[f]]} ({importances[indices[f]]})")
 
+# %%
+fig, axes = plt.subplots(2,2, figsize=(10,10), sharex=True, sharey=True)
+for i in range(4):
+    M = M.reshape(-1,4)
+    sort_ind = np.argsort(M[:,i])
+    maes = []
+    rs = list(np.linspace(0,1,11))
+    for r in rs:
+        print(r)
+        mae = np.mean(np.abs(Y_test[sort_ind[:int(r*len(Y))]]-P[sort_ind[:int(r*len(Y))]]))
+        maes.append(mae)
+    axes[i//2, i%2].plot(rs, maes)
+    axes[i//2, i%2].set_title(f"{metric_names[i]}")
+    axes[i//2, i%2].set_xlabel("ratio")
+    axes[i//2, i%2].set_ylabel("mae")
+# %%
 
-for i, preds in enumerate(preds_list):
-    plt.hist(preds[:,0], bins=100)
-    plt.xlim(50,120)
-    plt.savefig(os.path.join("/local/home/lhauptmann/thesis/analysis/AppleDataset/MCDropout", f"hist_{i}.png"))
+# %%
+
+#plot some traces
+for i in [1,50,400,800,730, 920, 320, 220]:
+    plt.plot(X_test[i,:,0], label="acc_x")
+    plt.plot(X_test[i,:,1], label="acc_y")
+    plt.plot(X_test[i,:,2], label="acc_z")
+    plt.legend()
+    plt.xlabel("Time [ms]")
+    plt.ylabel("Acceleration")
+    plt.savefig(f"/local/home/lhauptmann/thesis/images/midterm/signal_raw{i}.png")
     plt.clf()
 # %%
-for i, (x,y,d) in enumerate(val_loader):
-    plt.plot(x[0,:,0])
-    plt.plot(x[0,:,1])
-    plt.plot(x[0,:,2])
-    plt.savefig(os.path.join("/local/home/lhauptmann/thesis/analysis/AppleDataset/data_loader", f"signal_{i}.png"))
-    plt.clf()
+from scipy.signal import convolve
+P_smooth = convolve(P, np.ones(5)/5, mode="same")
+timestamps = D.reshape(-1,2)[:,1]
+plt.plot(timestamps[100:1000], Y[100:1000], label="True")
+plt.plot(timestamps[100:1000], P[100:1000], label="Predicted")
+plt.xlabel("Time [s]")
+plt.ylabel("HR [bpm]")
+plt.legend()
+# %%
+D = D.reshape(-1,2)
+
+selected_indices.shape, D.shape
+
+# find indices of selected_indices in D
+subjects = np.unique(D[:,0])
+sub_dict = {}
+for sub in subjects:
+    D_sub = D[D[:,0] == sub]
+    sel_sub = selected_indices[selected_indices[:,0] == sub]
+    sub_in = np.where(np.isin(D_sub[:,1], sel_sub[:,1]))[0]
+    ratio_sub = len(sub_in) / len(D_sub)
+    sub_dict[sub] = sub_in
+    print(sub)
+    print(D_sub.shape, sel_sub.shape,np.intersect1d(D_sub[:,1], sel_sub[:,1]).shape, np.union1d(D_sub[:,1], sel_sub[:,1]).shape, ratio_sub)
+
+
 # %%
 
-from bayesian_torch.models.dnn_to_bnn import dnn_to_bnn, get_kl_loss
 
-const_bnn_prior_parameters = {
-        "prior_mu": 0.0,
-        "prior_sigma": 1.0,
-        "posterior_mu_init": 0.0,
-        "posterior_rho_init": -3.0,
-        "type": "Reparameterization",  # Flipout or Reparameterization
-        "moped_enable": True,  # True to initialize mu/sigma from the pretrained dnn weights
-        "moped_delta": 0.5,
-}
+# %%
+import statsmodels.api as sm
+M_s = sm.add_constant(M)
+model = sm.OLS(Y, M_s).fit()
+print(model.summary())
+for feature in range(4):  # Exclude the constant term
+    plt.figure(figsize=(8, 6))
+    plt.scatter(M_s[:,feature], Y, label='Actual data')
     
-dnn_to_bnn(model_test, const_bnn_prior_parameters)
-# %%
-preds = []
-for _ in range(100):
-    out, x = model_test(x)
-    preds.append(out)
-# %%
-from bayesian_torch.layers.variational_layers.conv_variational import Conv1dReparameterization
-from bayesian_torch.layers.variational_layers.linear_variational import LinearReparameterization
-from bayesian_torch.layers.variational_layers.rnn_variational import LSTMReparameterization
-
-
-
-class BayesianCorNET(nn.Module):
-    # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
-    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True):
-        super(BayesianCorNET, self).__init__()
-        # vector size after a convolutional layer is given by:
-        # (input_size - kernel_size + 2 * padding) / stride + 1
-        
-        self.activation = nn.ELU()
-        self.backbone = backbone
-        self.n_classes = n_classes
-        self.dropout = nn.Dropout(0.1)
-        self.conv1 = nn.Sequential(Conv1dReparameterization(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
-                                         nn.BatchNorm1d(conv_kernels),
-                                         self.activation
-                                         )
-        self.conv1[0].dnn_to_bnn_flag = True
-        self.maxpool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
-        out_len = (input_size - kernel_size + 2 * 0) // 1 + 1
-        out_len = (out_len - 4 + 2 * 0) // 4 + 1
-        self.conv2 = nn.Sequential(Conv1dReparameterization(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
-                                         nn.BatchNorm1d(conv_kernels),
-                                         self.activation
-                                         )
-        self.conv2[0].dnn_to_bnn_flag = True
-        self.maxpool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
-                                         
-        out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
-        self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
-        # should be 50 with default parameters
-
-        self.lstm1 = LSTMReparameterization(in_features=conv_kernels, out_features=LSTM_units)
-        self.lstm2 = LSTMReparameterization(in_features=LSTM_units, out_features=LSTM_units)
-        self.lstm1.dnn_to_bnn_flag = True
-        self.lstm2.dnn_to_bnn_flag = True
-        self.out_dim = LSTM_units
-
-        if backbone == False:
-            self.classifier = LinearReparameterization(LSTM_units, n_classes) 
-            self.classifier.dnn_to_bnn_flag = True
-    def forward(self, x):
-        #self.lstm.flatten_parameters()
-        x = x.permute(0, 2, 1)
-        x = self.conv1(x)
-        x = self.maxpool1(x)
-        x = self.dropout(x)
-        x = self.conv2(x)
-        x = self.maxpool2(x)
-        x = self.dropout(x)
-        x = x.permute(2, 0, 1)
-        # shape is (L, N, H_in)
-        # L - seq_len, N - batch_size, H_in - input_size
-        # L = 19
-        # N = 64
-        # H_in = 32
-        x = x.reshape(x.shape[0], x.shape[1], -1)
-
-
-        x, h = self.lstm1(x)
-        h = (h[0].squeeze(1), h[1].squeeze(1))
-        x, h = self.lstm2(x, h)
-        x = x[-1, :, :]
-
-        if self.backbone:
-            return None, x
-        else:
-            out = self.classifier(x)
-            return out, x
-
-    def set_classification_head(self, classifier):
-        self.classifier = classifier
-        self.backbone = False
-# %%
-
-model = BayesianCorNET(n_channels=3, n_classes=1, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size=1000, backbone=False)
-model = model.to(DEVICE)
-# %%
-model(x)
-# %%
-from bayesian_torch.models.dnn_to_bnn import dnn_to_bnn, get_kl_loss
-
-kl_loss = get_kl_loss(model)
 # %%

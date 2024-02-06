@@ -16,10 +16,20 @@ import re
 import json
 from scipy.signal import resample
 from scipy.interpolate import interp1d
+from scipy.stats import rankdata
 
 NUM_FEATURES = 1
 
 
+def rank_metrics(metrics):
+    assert len(metrics.shape) == 2
+    # Takes as input an np array of shape (n_samples, n_metrics)
+    # The metric should have low values for good data
+    # Returns an array of shape (n_samples) with the indices of the best samples
+    ranks = np.apply_along_axis(rankdata, 0, metrics, method="max")
+    ranks = np.mean(ranks, axis=1)
+    best_ind = np.argsort(ranks)
+    return best_ind
 
 class data_loader_hr(Dataset):
     def __init__(self, samples, labels, domains):
@@ -102,14 +112,18 @@ def discretize_hr(y, hr_min, hr_max, n_bins:int=64, sigma=1.5):
     Outputs a shape (n_samples, n_bins) array.
     """
     def gaussian(x, mu, sig):
+        if sig == 0:
+            return (x == mu) * 1.0
         return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
 
     hr_range = hr_max - hr_min
-
+    
+    # clip values outside the range plus 3* sigma
     y = np.clip(y,-sigma/hr_range*3, 1 + sigma/hr_range*3)
 
     bins = np.linspace(0, 1, n_bins-1)
     bin_values = np.concatenate([[bins[0]], (bins[1:] + bins[:-1])/2 , [bins[-1]]])
+
     # creates discrete distributions of hr values
     y_discretized = np.array([gaussian(bin_values , x, sigma/hr_range) for x in y])
 
@@ -150,28 +164,44 @@ def load_random_indices(data_path):
         random_indices = cp.load(f)
     return random_indices
     
-def load_data(data_path, split=0,  subsample=1.0, reconstruction=False):
+def load_data(data_path, split=0,  subsample=1.0, reconstruction=False, subsample_ranked_train=False, subsample_ranked_val=False):
 
 
     def load_pickle(path):
         with open(path, 'rb') as f:
-            x,y,pid = cp.load(f)
-        return x,y,pid
+            data = cp.load(f)
+        return data
     
     def load_split(files, path):
-        x, y, pid = [], [], []
+        x, y, pid, mectrics = [], [], [], []
         for file in files:
-            x_, y_, pid_ = load_pickle(os.path.join(path, file))
-            x.append(x_)
-            y.append(y_)
-            pid.append(pid_)
+            data_ = load_pickle(os.path.join(path, file))
+
+            if len(data_) == 3:
+                x_, y_, pid_ = data_
+                metrics_ = np.array([])
+            elif len(data_) == 4:
+                x_, y_, pid_, metrics_ = data_
+            elif len(data_) == 2:
+                x_, pid_ = data_
+                y_ = np.array([])
+                metrics_ = np.array([])
+
+            if len(x_) != 0:
+                x.append(x_)
+                y.append(y_)
+                pid.append(pid_)
+                mectrics.append(metrics_)
+
         if len(x) == 0:
-            return np.array([]), np.array([]), np.array([])
+            return np.array([]), np.array([]), np.array([]), np.array([])
             
         x = np.concatenate(x)
         y = np.concatenate(y)
         pid = np.concatenate(pid)
-        return x,y,pid
+        mectrics = np.concatenate(mectrics)
+
+        return x,y,pid, mectrics
     
     def load_reconstruction_signal(files, path):
         # Load reconstruction signal for autoencoder training
@@ -201,14 +231,34 @@ def load_data(data_path, split=0,  subsample=1.0, reconstruction=False):
     test = split_files["test"]
     val = split_files["val"]
 
-    x_train, y_train, d_train = load_split(train, data_path)
-    x_val, y_val, d_val = load_split(val, data_path)
-    x_test, y_test, d_test = load_split(test, data_path)
+    x_train, y_train, d_train, metrics_train = load_split(train, data_path)
+    x_val, y_val, d_val, metrics_val = load_split(val, data_path)
+    x_test, y_test, d_test, metrics_test = load_split(test, data_path)
 
     if reconstruction:
         y_train = load_reconstruction_signal(train, data_path)
         y_val = load_reconstruction_signal(val, data_path)
         y_test = load_reconstruction_signal(test, data_path)
+
+    if subsample_ranked_train != None and subsample_ranked_train != 0 and subsample_ranked_train != 1.0:
+        best_ind_train = rank_metrics(metrics_train)
+        num_values = int(len(x_train)*subsample_ranked_train)
+        x_train = x_train[best_ind_train[:num_values]]
+        y_train = y_train[best_ind_train[:num_values]]
+        d_train = d_train[best_ind_train[:num_values]]
+
+    if subsample_ranked_val != None and subsample_ranked_val != 0 and subsample_ranked_val != 1.0:
+        best_ind_val = rank_metrics(metrics_val)
+        num_values = int(len(x_val)*subsample_ranked_val)
+        x_val = x_val[best_ind_val[:num_values]]
+        y_val = y_val[best_ind_val[:num_values]]
+        d_val = d_val[best_ind_val[:num_values]]
+
+        best_ind_test = rank_metrics(metrics_test)
+        num_values = int(len(x_test)*subsample_ranked_val)
+        x_test = x_test[best_ind_test[:num_values]]
+        y_test = y_test[best_ind_test[:num_values]]
+        d_test = d_test[best_ind_test[:num_values]]
 
 
     d_train = d_train.astype(float)
@@ -276,7 +326,7 @@ def load_data_no_labels(data_path, split:int=0, subsample=1.0, reconstruction=Fa
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
-def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.0, reconstruction=False, sample_sequences:bool=False, discrete_hr:bool=False):
+def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.0, reconstruction=False, sample_sequences:bool=False, discrete_hr:bool=False, sigma=None):
     if dataset is None:
         dataset = args.dataset
     if split is None:
@@ -284,23 +334,36 @@ def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.
 
     if dataset == 'max':
         data_path = config.data_dir_Max_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
     elif dataset == 'apple':
         data_path = config.data_dir_Apple_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
     elif dataset == 'm2sleep':
         data_path = config.data_dir_M2Sleep_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
     elif dataset == 'capture24':
         data_path = config.data_dir_Capture24_processed
         x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
     elif dataset == 'apple100':
-        data_path = config.data_dir_Apple_processed_100hz
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, subsample=subsample_rate, reconstruction=reconstruction)
+        # take the dataset, that has a couple of metrics for each window
+        # the dataset with metrics is computed a little differently, so there might be differences
+        if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
+            data_path = config.data_dir_Apple_processed_100hz
+        else:
+            data_path = config.data_dir_Apple_processed_100hz_wmetrics
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
     elif dataset == 'm2sleep100':
         data_path = config.data_dir_M2Sleep_processed_100Hz
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
-    
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+    elif dataset == "parkinson100":
+        # take the dataset that has a couple of metrics for each window
+        # will change results
+        if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
+            data_path = config.data_dir_Parkinson_processed_100Hz
+        else:
+            data_path = config.data_dir_Parkinson_processed_100Hz_wmetrics
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
     if resampling_rate != 1:
@@ -324,7 +387,7 @@ def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.
         y_test = norm_hr(y_test, args.hr_min, args.hr_max)
 
     if discrete_hr and not reconstruction:
-        sigma = args.label_sigma
+        sigma = args.label_sigma if sigma is None else sigma
         y_train = discretize_hr(y_train, hr_min = args.hr_min, hr_max = args.hr_max, n_bins=args.n_prob_class, sigma=sigma)
         y_val = discretize_hr(y_val, hr_min = args.hr_min, hr_max = args.hr_max, n_bins=args.n_prob_class, sigma=sigma)
         y_test = discretize_hr(y_test, hr_min = args.hr_min, hr_max = args.hr_max, n_bins=args.n_prob_class, sigma=sigma)
