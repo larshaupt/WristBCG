@@ -3,7 +3,14 @@ import numpy as np
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+import classical_utils
 
+
+
+# TODO: Have a look at the following paper:
+# TROIKA: A General Framework for Heart Rate Monitoring Using Wrist-Type Photoplethysmographic Signals Durin
+# Same approach, but component selection is different
+# https://github.com/hpi-dhc/TROIKA/blob/c144c185a87c2f52fbc6f7e0f82dde790a99bf7e/py_ppg_package/ppg_package/TROIKA.py
 # %%
 def embed_time_series(data, window_size):
     # function to form a hankel matrix from delay-embeddings from time series
@@ -144,3 +151,4 @@ def do_ssa_axis(time_series, lagged_window_size = 1001, main_axis = "x", tau=0.6
     return reconstructed_signal
 
 # %%
+

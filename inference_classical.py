@@ -1,299 +1,260 @@
 #%%
 import os
-import json
 import pandas as pd
 import numpy as np
-
 import matplotlib.pyplot as plt
-from datetime import datetime
-
-import pickle
 import config
-import importlib
-
-import sys
-sys.path.append("/local/home/lhauptmann/thesis/t-mt-2023-WristBCG-LarsHauptmann/source")
-import data_utils
-import heartpy as hp
 import wandb
-import ssa_hr
-from scipy.signal import find_peaks, find_peaks_cwt
+import scipy.signal
+
+from classical_utils import *
 
 #%%
 
-
-def load_subjects(dataset_dir, subject_paths):
-    X, Y, pid, metrics = [], [], [], []
-    for sub in subject_paths:
-        with open(os.path.join(dataset_dir, sub), "rb") as f:
-            data = pickle.load(f)
-            if len(data) == 4:
-                X_sub, Y_sub, pid_sub, metrics_sub = data
-            else:
-                X_sub, Y_sub, pid_sub = data
-                metrics_sub = None
-
-        X.append(X_sub)
-        Y.append(Y_sub)
-        pid.append(pid_sub)
-        metrics.append(metrics_sub)
-
-        X = np.concatenate(X, axis=0)
-        Y = np.concatenate(Y, axis=0)
-        pid = np.concatenate(pid, axis=0)
-        metrics = np.concatenate(metrics, axis=0)
-
-        return X, Y, pid, metrics
-
-def load_dataset(dataset_dir, split, load_train=False):
-    # load split
-    split_file = os.path.join(dataset_dir, f'splits.json')
-
-    if not os.path.exists(split_file):
-        raise ValueError(f"Split file {split_file} does not exist")
-    
-    with open(split_file) as f:
-        splits = json.load(f)
-
-    split = splits[str(split)]
-
-
-    # load data
-    if load_train:
-        X_train, Y_train, pid_train, metrics_train = load_subjects(dataset_dir, split["train"])
-    X_val, Y_val, pid_val, metrics_val = load_subjects(dataset_dir, split["val"])
-    X_test, Y_test, pid_test, metrics_test = load_subjects(dataset_dir, split["test"])
-
-    if load_train:
-        return X_train, Y_train, pid_train, metrics_train, X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
-    else:
-        return X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
-
-def compute_hr_bioglass(X, fs = None, peak_distance = 0.5, peak_prominence = 0.3):
-    
-
-    if hasattr(X, "fs"):
-        fs = X.fs
-    else:
-        if fs is None:
-            raise ValueError("fs is not defined")
-
-    if not isinstance (X, pd.DataFrame):
-        X = pd.DataFrame(X, columns=["acc_x", "acc_y", "acc_z"])
-    
-    df_snip_processed = data_utils.full_a_processing(X, fs)
-    filtered_signal = df_snip_processed["mag_filtered"]
-
-    filtered_signal = hp.scale_data(filtered_signal)
-    filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
-    filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
-    #ecg = hp.enhance_ecg_peaks(hp.scale_data(ecg), fs, aggregation='median', iterations=5)
-
-    hr_rr = extract_hr_peaks(filtered_signal, fs)
-    return hr_rr
-
-
-def compute_hr_ssa(X, fs = None, lagged_window_size = 501, first_n_components=20, peak_distance = 0.5, peak_prominence = 0.3):
-    if hasattr(X, "fs"):
-        fs = X.fs
-    else:
-        if fs is None:
-            raise ValueError("fs is not defined")
-
-    if not isinstance(X, np.ndarray): 
-        X = X.to_numpy()
-    
-    filtered_signal = ssa_hr.do_ssa_firstn(X, lagged_window_size=lagged_window_size, first_n_components=first_n_components)
-    filtered_signal = data_utils.butterworth_bandpass(filtered_signal, fs, 0.5, 2)
-
-    #filtered_signal = hp.scale_data(filtered_signal)
-    #filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
-    #filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
-    #filtered_signal = hp.enhance_ecg_peaks(filtered_signal, fs, aggregation='median', iterations=5)
-    hr_rr = extract_hr_peaks(filtered_signal, fs)
-
-    return hr_rr
-
-
-def extract_hr_peaks(signal, fs):
-    peaks = find_peaks_cwt(signal, np.arange(5,80))
-    #peaks = find_peaks(signal, distance=0.5*fs, prominence=0.3 * np.quantile(signal, 0.9))[0]
-    rr = np.diff(peaks)
-    rr = rr[(rr > 0.5*fs) & (rr < 1.5*fs)]
-    if len(rr) < 2:
-        return np.nan
-    hr = 60*fs/np.mean(rr)
-    return hr
-# %%
-
 results_dir = config.classical_results_dir
 
-dataset = "max"
-
+dataset = "Apple100"
+framework = "SSA"
+wandb_mode = "disabled"
 
 if dataset == "max":
     dataset_dir = config.data_dir_Max_processed
+elif dataset == "Apple100":
+    dataset_dir = config.data_dir_Apple_processed_100hz
 else:
     NotImplementedError
 
 
-
 #%%
 
-
-for split in range(1,5):
-
+""" 
+for split in range(5):
+    print(f"Processing split {split}")
     X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, split)
-
+    predictions_path_val = os.path.join(results_dir, f"predictions_{framework}_val_{dataset}_split{split}.pkl")
+    predictions_path_test = os.path.join(results_dir, f"predictions_{framework}_test_{dataset}_split{split}.pkl")
     config_dict = {"peak_distance": 0.5, 
                 "peak_prominence": 0.3, 
-                "framework": "SSA",
+                "framework": framework,
                 "dataset": dataset,
-                "split": split,}
-
+                "split": split,
+                "predictions_path_val": predictions_path_val,
+                "predictions_path_test": predictions_path_test,}
+    print(f"Config: {config_dict}")
     if config_dict["framework"] == 'Bioglass':
         compute_hr = compute_hr_bioglass
     elif config_dict["framework"] == 'SSA':
         compute_hr = compute_hr_ssa
 
     # Initialize WandB with your project name and optional configuration
-    wandb.init(project="hr_results", config=config_dict, group=config_dict["framework"], mode="online")
+    wandb.init(project="hr_results", config=config_dict, group=config_dict["framework"], mode=wandb_mode)
     hr_rr_val = []
-    for X in X_val:
+    print(f"Processing val set")
+    for i, X in enumerate(X_val):
         hr_rr = compute_hr(X, fs=100)
         hr_rr_val.append(hr_rr)
-    results_df_val = pd.DataFrame({"y_true": Y_val, "hr_pred": hr_rr_val})
-    corr_val = results_df_val.corr().iloc[0,1]
+    results_df_val = pd.DataFrame({"y_true": Y_val, "hr_pred": hr_rr_val, "pid": [el for el in pid_val], "metrics": [el for el in metrics_val]})
+    corr_val = results_df_val[["y_true", "hr_pred"]].corr().iloc[0,1]
     results_df_val["diff_abs"] = (results_df_val["y_true"] - results_df_val["hr_pred"]).abs()
     mae_val = results_df_val.dropna()["diff_abs"].mean()
 
     wandb.log({"Val_Corr": corr_val, "Val_MAE": mae_val})
+    results_df_val.to_pickle(predictions_path_val)
+    print(f"Saves results to {predictions_path_val}")
+
 
     hr_rr_test = []
-    for X in X_test:
+    print(f"Processing test set")
+    for i, X in enumerate(X_test):
         hr_rr = compute_hr(X, fs=100)
 
         hr_rr_test.append(hr_rr)    
-    results_df_test = pd.DataFrame({"y_true": Y_test, "hr_pred": hr_rr_test})
-    corr_test = results_df_test.corr().iloc[0,1]
+    results_df_test = pd.DataFrame({"y_true": Y_test, "hr_pred": hr_rr_test, "pid": [el for el in pid_test], "metrics": [el for el in metrics_test]})
+    corr_test = results_df_test[["y_true", "hr_pred"]].corr().iloc[0,1]
     results_df_test["diff_abs"] = (results_df_test["y_true"] - results_df_test["hr_pred"]).abs()
     mae_test = results_df_test.dropna()["diff_abs"].mean()
 
     wandb.log({"Test_Corr": corr_test, "Test_MAE": mae_test})
-
+    print(f"Saves results to {predictions_path_test}")
+    results_df_test.to_pickle(predictions_path_test)
     # Finish the run
-    wandb.finish()
+    wandb.finish() """
 
 # %%
+split = 0
+X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, split)
 
 
-""" X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, 1)
-fs = 100
+import TROIKA_bcg
+from sklearn.metrics import pairwise_distances
 
-X = X_val[0] 
-df_snip_processed = data_utils.full_a_processing(pd.DataFrame(X, columns = ["acc_x", "acc_y", "acc_z"]), fs)
-filtered_signal = df_snip_processed["mag_filtered"]
-
-import heartpy as hp
-
-
-filtered_signal = hp.scale_data(filtered_signal)
-filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
-filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
-#ecg = hp.enhance_ecg_peaks(hp.scale_data(ecg), fs, aggregation='median', iterations=5)
-
-working_data, measures = hp.process(filtered_signal, fs, report_time=False)
-hr_rr = measures["bpm"] """
-
-# %%
-""" import ssa_hr
-# %%
-import importlib
-importlib.reload(ssa_hr)
-signal = X_val[200]
-#signal = np.apply_along_axis(data_utils.butterworth_bandpass, 0, signal, 100, 0.5, 10)
-filtered_signal = ssa_hr.do_ssa(signal, lagged_window_size=501, tau=0.6, main_axis="y")
-filtered_signal = data_utils.butterworth_bandpass(filtered_signal, 100, 0.5, 2)
-plt.plot(filtered_signal)
-# %%
-filtered_signal_b = data_utils.butterworth_bandpass(filtered_signal, 100, 0.5, 3)
-plt.plot(filtered_signal_b)
-# %%
-X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, 1)
-df_X = pd.DataFrame(X_val[300], columns = ["acc_x", "acc_y", "acc_z"])
-signal_filtered = data_utils.full_a_processing(df_X, 100)
-# %%
-df_X.plot()
-plt.xlabel("Time [ms]")
-plt.ylabel("Acceleration")
-# %%
-signal_filtered["mag_filtered"].plot()
-plt.xlabel("Time [ms]")
-plt.ylabel("Acceleration")
-
-
-
-# %%
-working_data, measures = hp.process(signal_filtered["mag_filtered"], 100, report_time=False)
-# plot peaks
-peaks = working_data["peaklist"]
-plt.plot(signal_filtered["mag_filtered"])
-plt.plot(peaks, signal_filtered["mag_filtered"][peaks], "x")
-# %%
-hp.plotter(working_data, measures)
-# %%
-i = 1400
-hr_ssa = compute_hr_ssa(X_val[i], fs=100, tau=0.6, lagged_window_size=501,first_n_components=10, main_axis="z")
-print(hr_ssa, Y_val[i])
-# %% """
-#%%
-""" X = pd.DataFrame(X_test[400], columns=["acc_x", "acc_y", "acc_z"])
-fs|=100
-df_snip_processed = data_utils.full_a_processing(X, fs)
-filtered_signal = df_snip_processed["mag_filtered"]
-# %%
-
-peaks = find_peaks_cwt(filtered_signal, np.arange(5, 100))
-plt.plot(filtered_signal)
-plt.plot(peaks, filtered_signal[peaks], "x")
-# %%
-X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, 0)
-
-
-#%%
-X_processed = []
-for  i, (X, Y) in enumerate(zip(X_test, Y_test)):
-    X = pd.DataFrame(X, columns=["acc_x", "acc_y", "acc_z"])
-    df_snip_processed = data_utils.full_a_processing(X, 100)
-    X_processed.append(df_snip_processed)
-
-#%%
-max_width = 80
-min_steps = [2, 5,10]
-from scipy.signal import find_peaks_cwt
-fs = 100
-results_4 = {}
-min_width = 0
-
-
-
-for  i, (X, Y) in enumerate(zip(X_processed, Y_test)):
+def wcorr(ts1: np.ndarray, ts2: np.ndarray) -> float:
+    """
+    weighted correlation of ts1 and ts2.
+    w is precomputed for reuse.
+    """
+    L = 500
+    N = 1000
+    K = N - L + 1
+    w = np.concatenate((np.arange(1, L+1), np.full((K-L,), L), np.arange(L-1, 0, -1)))
+    w_covar = (w * ts1 * ts2).sum()
+    ts1_w_norm = np.sqrt((w * ts1 * ts1).sum())
+    ts2_w_norm = np.sqrt((w * ts2 * ts2).sum())
     
-    for min_step in min_steps:
-        print(min_width)
-        peaks = find_peaks_cwt(X["mag_filtered"], np.arange(min_width, max_width, min_step))
-        rr = np.diff(peaks)
-        hr = 60*fs/np.mean(rr)
-        results_4[(i, min_step)] = (hr, Y)
-# %%
-results_df = pd.DataFrame(results_3).T
-results_df.columns = ["hr", "y_true"]
-results_df.index.names = ["i", "min_width"]
-results_df = results_df.reset_index().set_index("i")
-# compute correlation for each group between y_true and hr
-corr = results_df.groupby("min_width").apply(lambda x: x["hr"].corr(x["y_true"]))
-# compute mae
-mae = results_df.groupby("min_width").apply(lambda x: np.abs(x["hr"]-x["y_true"]).mean())
-corr,mae
+    return w_covar / (ts1_w_norm * ts2_w_norm)
+
+
+def select_components(acc_groups, threshold=0.1):
+    selected_indices = []
+    for i in range(acc_groups.shape[0]):
+        _, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=4096 * 2 - 1)
+        frequencies = np.linspace(0,100, 4096)
+        max_amplitude = np.max(np.abs(periodogram))
+        hr_frequenies = (frequencies > 0.5) & (frequencies < 4)
+
+        if np.any(periodogram[hr_frequenies] > max_amplitude*threshold):
+            selected_indices = np.append(selected_indices, i)
+
+    selected_indices = np.array(selected_indices, dtype=int)
+    acc_reconstructed = acc_groups[selected_indices,:].sum(axis=0)
+    return acc_reconstructed
+
+results = []
+for i in range(len(X_test)):
+    print(f"Processing {i}")
+    acc = X_test[i,:,:]
+    hr_true = Y_test[i]
+
+
+
+    acc_x = data_utils.butterworth_bandpass(acc[:,0], low=0.5, high=4, fs=100)
+    acc_y = data_utils.butterworth_bandpass(acc[:,1], low=0.5, high=4, fs=100)
+    acc_z = data_utils.butterworth_bandpass(acc[:,2], low=0.5, high=4, fs=100)
+    acc_groups_x, wcorr_x = TROIKA_bcg.ssa(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
+    acc_groups_y, wcorr_y = TROIKA_bcg.ssa(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
+    acc_groups_z, wcorr_z = TROIKA_bcg.ssa(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
+
+
+    def select_components(acc_groups, threshold=0.1):
+        selected_indices = []
+        for i in range(acc_groups.shape[0]):
+            frequencies, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=4096 * 2 - 1, fs=100)
+            max_amplitude = np.max(np.abs(periodogram))
+            hr_frequenies = (frequencies > 0.5) & (frequencies < 3)
+
+            if np.any(periodogram[hr_frequenies] > max_amplitude*threshold):
+                selected_indices = np.append(selected_indices, i)
+        #print(selected_indices)
+        selected_indices = np.array(selected_indices, dtype=int)
+        acc_reconstructed = acc_groups[selected_indices,:].sum(axis=0)
+        return acc_reconstructed
+
+
+    acc_reconstructed_x = select_components(acc_groups_x)
+    acc_reconstructed_y = select_components(acc_groups_y)
+    acc_reconstructed_z = select_components(acc_groups_z)
+
+    acc_reconstructed = np.sqrt(acc_reconstructed_x**2 + acc_reconstructed_y**2 + acc_reconstructed_z**2)
+
+    #plt.plot(acc_reconstructed)
+
+    # differentiating for more robustness
+    acc_reconstructed = np.diff(acc_reconstructed)
+
+
+    frequencies, periodogram = scipy.signal.periodogram(acc_reconstructed, nfft=4096 * 2 - 1, fs=100)
+    #plt.plot(frequencies, periodogram)
+    #plt.xlim(0, 3)
+
+    # plot y log
+    #plt.yscale("log")
+    hr_frequenies_ind = (frequencies > 0.5) & (frequencies < 2)
+    hr_periodogram, hr_frequenies = periodogram[hr_frequenies_ind], frequencies[hr_frequenies_ind]
+    hr_peak_ind = scipy.signal.find_peaks(hr_periodogram)[0]
+    highest_hr_peak_ind = np.argsort(hr_periodogram[hr_peak_ind])[::-1][:10]
+    # take highest peaks in the range 0.5-2 Hz
+
+    highest_hr_peaks = hr_frequenies[hr_peak_ind[highest_hr_peak_ind]] * 60
+    highest_hr_peak = highest_hr_peaks[0]
+    closest_hr_peak = highest_hr_peaks[np.argmin(np.abs(highest_hr_peaks - hr_true))]
+    print(highest_hr_peak,closest_hr_peak, hr_true)
+
+    results.append((highest_hr_peak, closest_hr_peak, hr_true))
+
+results_df = pd.DataFrame(results, columns=["highest_hr_peak", "closest_hr_peak", "hr_true"])
+results_df.to_csv("ssa_results.csv")
+
+
 # %%
 """
+
+ssr = TROIKA_bcg.SSR(1000, 4096, 100, lambda_factor=0.05)
+acc_spectrum = ssr.transform(ssa_acc)
+import importlib
+importlib.reload(TROIKA_bcg)
+# %%
+
+
+
+ # %%
+ssr = TROIKA_bcg.SSR(1000, 4096, 100, lambda_factor=0.0005)
+acc_spectrum = ssr.transform(acc_reconstructed)
+# %%
+
+
+acc_reconstructed
+# %%
+
+f_s = 100
+M = 1000 #num samples in window
+N = 4096 #num frequencies
+lambda_factor = 1
+
+
+# %%
+n_start = (0.1*N//100) - 1
+n_end = (4.4*N//100) + 1
+ns = np.arange(n_start, n_end)
+m, n = np.meshgrid(np.arange(M), np.arange(n_start, n_end), indexing='ij')
+Phi = np.exp(1j * 2 * np.pi / N * m * n)
+# %%
+
+# %%
+from scipy.optimize import minimize
+y = acc_reconstructed
+phi_pinv = np.linalg.pinv(Phi)
+lambda_factor = 500
+x0 = phi_pinv @ y
+print(f"Sparsity: {np.linalg.norm(x0, ord=1)}, estimation quality: {np.linalg.norm(Phi @ x0 - y, ord=2) * lambda_factor}")
+def print_current_target(xk):
+    print(f"Sparsity: {np.linalg.norm(xk, ord=1)}, estimation quality: {np.linalg.norm(Phi @ xk - y, ord=2) * lambda_factor}")
+
+constraints = {
+    'type': 'eq',
+    'fun': lambda x: np.linalg.norm(Phi @ x - y, ord=2) * lambda_factor
+}
+optimize_result = minimize(lambda x: np.linalg.norm(x, ord=1),
+                            x0, method='SLSQP',
+                            options={'maxiter': 5},
+                            constraints=constraints,
+                            callback=print_current_target)
+s_k = optimize_result.x ** 2
+# %%
+
+import cr.sparse.pursuit.mp as mp
+sol = mp.solve(A, acc_reconstructed)
+x = sol.x
+
+#%%
+import cr.sparse.cvx.spgl1 as crspgl1
+sigma=0.
+options = crspgl1.SPGL1Options(max_iters=300)
+tracker = crs.ProgressTracker(every=10)
+x_init = scipy.signal.periodogram(acc_reconstructed, nfft=4096 * 2 - 1)
+sol = crspgl1.solve_bpic_from_jit(A, acc_reconstructed, sigma,
+    x_init, options=options, tracker=tracker)
+# %%
+import cr.sparse.lop as lop
+A = lop.matrix(Phi)
+# %%
+ """

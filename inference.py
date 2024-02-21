@@ -13,16 +13,26 @@ from models.backbones import *
 from models.loss import *
 from trainer import *
 from argparse import Namespace
+import classical_utils
+from main import get_parser
 
 
 #%%
 
-json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_simsiam_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.0_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/config.json"
-#json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_AE_pretrain_max_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm/config.json"
+#json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_stepsize_4/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
+#json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
+json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split0_eps60_bs512_config.json"
 with open(json_file) as json_file:
     json_args = json.load(json_file)
 
-args = Namespace(**json_args)
+
+
+parser = get_parser()
+args = parser.parse_args([])
+args_dict = vars(args)
+args_dict.update(json_args)
+args = Namespace(**args_dict)
+
 split = 0
 
 mode = "finetune"
@@ -33,15 +43,22 @@ if not hasattr(args, "model_name"):
 else:
     args.model_name = re.sub(r'split\d+', f"split{split}", args.model_name)
 
-if mode == "pretrain":
-    model_weights_path = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name  + "_bestmodel" + '.pt')
-elif mode == "finetune":
-    model_weights_path = os.path.join(args.model_dir_name, 'lincls_' + args.model_name + "_split" + str(args.split) + "_bestmodel" + '.pt')
-elif mode == "supervised":
-    model_weights_path = os.path.join(args.model_dir_name, args.model_name + '_model.pt')
-args.batch_size = 1
-args.cuda = 3
-args.dataset = "apple100"
+if mode == "finetune":
+    model_weights_path = args.lincl_model_file
+elif mode == "pretrain":
+    model_weights_path = args.pretrain_model_file
+else:
+    raise ValueError(f"Mode {mode} not supported")
+
+#args.batch_size = 1
+#args.cuda = 3
+#args.dataset = "IEEE"
+args.step_size = 8
+args.window_size = 10
+#args.sampling_rate = 100
+#args.subsample_ranked_train = 1.0
+args.dataset = "appleall"
+#args.hr_min = 30
 # %%
 # Testing
 #######################
@@ -50,44 +67,7 @@ print('device:', DEVICE, 'dataset:', args.dataset)
 #%%
 # Load data
 train_loader, val_loader, test_loader = setup_dataloaders(args)
-#%%
 
-class AE(nn.Module):
-    def __init__(self, n_channels, input_size, n_classes, outdim=128, backbone=True):
-        super(AE, self).__init__()
-
-        self.backbone = backbone
-        self.input_size = input_size
-
-        self.e1 = nn.Linear(n_channels, 8)
-        self.e2 = nn.Linear(8 * input_size, 2 * input_size)
-        self.e3 = nn.Linear(2 * input_size, outdim)
-
-        self.d1 = nn.Linear(outdim, 2 * input_size)
-        self.d2 = nn.Linear(2 * input_size, 8 * input_size)
-        self.d3 = nn.Linear(8, 1)
-
-        self.out_dim = outdim
-
-        if backbone == False:
-            self.classifier = nn.Linear(outdim, n_classes)
-
-    def forward(self, x):
-        x_e1 = self.e1(x)
-        x_e1 = x_e1.reshape(x_e1.shape[0], -1)
-        x_e2 = self.e2(x_e1)
-        x_encoded = self.e3(x_e2)
-
-        x_d1 = self.d1(x_encoded)
-        x_d2 = self.d2(x_d1)
-        x_d2 = x_d2.reshape(x_d2.shape[0], self.input_size, 8)
-        x_decoded = self.d3(x_d2)
-
-        if self.backbone:
-            return x_decoded, x_encoded
-        else:
-            out = self.classifier(x_encoded)
-            return out, x_decoded
 #%%
 # Initialize and load test model
 if args.backbone == 'FCN':
@@ -113,9 +93,10 @@ else:
 model_weights_dict = torch.load(model_weights_path)
 
 if mode == "finetune":
-    model_weights = model_weights_dict["trained_backbone"]
     classifier = setup_linclf(args, DEVICE, model_test.out_dim)
     model_test.set_classification_head(classifier)
+    model_weights = load_best_lincls(args)
+
 
 elif mode == "pretrain":
     model_weights = model_weights_dict["model_state_dict"]
@@ -128,6 +109,7 @@ model_test = model_test.to(DEVICE)
 X, Y, D, P = [], [], [], []
 
 for i, (x, y, d) in enumerate(test_loader):
+
     x = x.to(DEVICE).float()
     y = y.to(DEVICE)
     d = d.to(DEVICE)
@@ -140,7 +122,6 @@ for i, (x, y, d) in enumerate(test_loader):
     Y.append(y)
     D.append(d)
     P.append(p)
-
     
 X = np.concatenate(X)
 Y = np.concatenate(Y)
@@ -160,6 +141,9 @@ print(f"Correlation: {corr}")
 print(f"MAE: {mae}")
 print(f"RMSE: {rmse}")
 
+#%%
+df_bioglass = pd.read_pickle(os.path.join(config.classical_results_dir, "predictions_Bioglass_test_Apple100_split0.pkl"))
+df_ssa = pd.read_pickle(os.path.join(config.classical_results_dir, "predictions_SSA_test_Apple100_split0.pkl"))
 
 #%%
 
@@ -187,7 +171,7 @@ df_grouped
 #%%
 # Look at average HR and HR predictions
 
-fig, axes = plt.subplots(2,3, figsize=(15,8), dpi=500, sharex=True)
+fig, axes = plt.subplots(2,len(subjects), figsize=(len(subjects)*5,8), dpi=500, sharex=True)
 
 for i, sub in enumerate(subjects):
 
@@ -201,16 +185,26 @@ for i, sub in enumerate(subjects):
 
 # %%
 # Look at HR and HR predictions over time
-fig, axes = plt.subplots(len(subjects),1, figsize=(8,15))
+fig, axes = plt.subplots(2,2, figsize=(20,10), sharey=True)
 for i, sub in enumerate(subjects):
+
+    if i > 3:
+        break
     df_sub = df_res[df_res["sub"] == sub]
-    #df_sub = df_sub.iloc[500:-500]
     
-    df_sub["Y"].rolling(10).median().plot(ax=axes[i], label="Y")
-    df_sub["P"].rolling(10).median().plot(ax=axes[i], label="P")
-    axes[i].set_title(f"Subject {sub} HR over time")
-    axes[i].legend()
+    df_sub["Y"].rolling(10).median().plot(ax=axes[i%2,i//2], label="Ground Truth", marker="", alpha=1.0, linewidth=2, color='green')
+    df_sub["P"].rolling(10).median().plot(ax=axes[i%2,i//2], label="Supervised Regression", marker="", alpha=1.0, color="#A1A9AD")
+    #df_bioglass[df_res["sub"] == sub]["hr_pred"].rolling(10).median().plot(ax=axes[i%2,i//2], label="Bioglass", marker="", alpha=0.5, color="#5BC5DB")
+    #df_ssa[df_res["sub"] == sub]["hr_pred"].rolling(10).median().plot(ax=axes[i%2,i//2], label="SSA", marker="", alpha=0.5, color="#A12864")
+    axes[i%2,i//2].set_title(f"Subject {sub}")
+    axes[i%2,i//2].set_xlabel("Time [s]")
+    axes[i%2,i//2].set_ylabel("HR [bpm]")
+
+axes[0,0].legend()
+
     #print(df_sub[["Y", "P"]].corr().iloc[0,1])
+
+fig.tight_layout()
 
 #%%
 # Look at best and worst predictions
@@ -231,77 +225,18 @@ for i, sub in enumerate(subjects):
 
 
 # %%
-i = -8
-df_sub = df_res[df_res["sub"] == subjects[0]]
-df_sub["diff"] = np.abs(df_sub["Y"] - df_sub["P"])
-df_sub = df_sub.sort_values("diff", ascending=True)
-plt.plot(df_sub["X"].iloc[i])
-plt.xlabel("Time")
-plt.title(f"HR: {df_sub['Y'].iloc[i]:.1f}, Pred: {df_sub['P'].iloc[i]:.1f}")
+
+data_dir = config.data_dir_Apple_processed_all
+X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = classical_utils.load_dataset(data_dir, 0)
 # %%
-
-
-import pickle
-def load_subjects(dataset_dir, subject_paths):
-    X, Y, pid, metrics = [], [], [], []
-    for sub in subject_paths:
-        with open(os.path.join(dataset_dir, sub), "rb") as f:
-            data = pickle.load(f)
-            if len(data) == 4:
-                X_sub, Y_sub, pid_sub, metrics_sub = data
-            else:
-                X_sub, Y_sub, pid_sub = data
-                metrics_sub = np.array([0] * len(Y_sub))
-
-        X.append(X_sub)
-        Y.append(Y_sub)
-        pid.append(pid_sub)
-        metrics.append(metrics_sub)
-
-    X = np.concatenate(X, axis=0)
-    Y = np.concatenate(Y, axis=0)
-    pid = np.concatenate(pid, axis=0)
-    metrics = np.concatenate(metrics, axis=0)
-
-    return X, Y, pid, metrics
-
-def load_dataset(dataset_dir, split, load_train=False):
-    # load split
-    split_file = os.path.join(dataset_dir, f'splits.json')
-
-    if not os.path.exists(split_file):
-        raise ValueError(f"Split file {split_file} does not exist")
-    
-    with open(split_file) as f:
-        splits = json.load(f)
-
-    split = splits[str(split)]
-
-
-    # load data
-    if load_train:
-        X_train, Y_train, pid_train, metrics_train = load_subjects(dataset_dir, split["train"])
-    X_val, Y_val, pid_val, metrics_val = load_subjects(dataset_dir, split["val"])
-    X_test, Y_test, pid_test, metrics_test = load_subjects(dataset_dir, split["test"])
-
-    if load_train:
-        return X_train, Y_train, pid_train, metrics_train, X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
-    else:
-        return X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
-    
-#%%
-data_dir = config.data_dir_Apple_processed_100hz_wmetrics
-X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(data_dir, 0)
-# %%
-
 
 
 X, Y, D, P, M = [], [], [], [], []
 # metrices are metric_avg, metric_max, metric_angle, metric_hr
 for i, (x, y, d, metric) in enumerate(zip(X_test, Y_test, pid_test, metrics_test)):
     print(i)
-    if not (metric[0] < 0.08 and metric[1] < 0.5 and metric[2] < 5 and metric[3] < 40):
-       pass
+    #if not (metric[0] < 0.01 and metric[1] < 0.5 and metric[2] < 0.1 and metric[3] < 5):
+    #   continue
     x = torch.Tensor(x).unsqueeze(0).to(DEVICE).float()
     # z normalize x
     x = (x - x.mean()) / x.std()
@@ -401,34 +336,3 @@ plt.plot(timestamps[100:1000], P[100:1000], label="Predicted")
 plt.xlabel("Time [s]")
 plt.ylabel("HR [bpm]")
 plt.legend()
-# %%
-D = D.reshape(-1,2)
-
-selected_indices.shape, D.shape
-
-# find indices of selected_indices in D
-subjects = np.unique(D[:,0])
-sub_dict = {}
-for sub in subjects:
-    D_sub = D[D[:,0] == sub]
-    sel_sub = selected_indices[selected_indices[:,0] == sub]
-    sub_in = np.where(np.isin(D_sub[:,1], sel_sub[:,1]))[0]
-    ratio_sub = len(sub_in) / len(D_sub)
-    sub_dict[sub] = sub_in
-    print(sub)
-    print(D_sub.shape, sel_sub.shape,np.intersect1d(D_sub[:,1], sel_sub[:,1]).shape, np.union1d(D_sub[:,1], sel_sub[:,1]).shape, ratio_sub)
-
-
-# %%
-
-
-# %%
-import statsmodels.api as sm
-M_s = sm.add_constant(M)
-model = sm.OLS(Y, M_s).fit()
-print(model.summary())
-for feature in range(4):  # Exclude the constant term
-    plt.figure(figsize=(8, 6))
-    plt.scatter(M_s[:,feature], Y, label='Actual data')
-    
-# %%

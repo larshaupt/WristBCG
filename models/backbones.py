@@ -487,9 +487,11 @@ class LSTM_Classifier(nn.Module):
         return out
 
 class Classifier(nn.Module):
-    def __init__(self, bb_dim, n_classes):
+    def __init__(self, bb_dim, n_classes, tau=1.0):
         super(Classifier, self).__init__()
         self.n_classes = n_classes
+        
+        self.tau = nn.Parameter(torch.tensor(tau), requires_grad=False)
 
         self.classifier = nn.Linear(bb_dim, n_classes)
 
@@ -502,9 +504,13 @@ class Classifier(nn.Module):
         out = self.classifier(x)
 
         if self.n_classes > 1:
+            out = out / self.tau
             out = self.softmax(out)
 
         return out
+    
+    def set_temperature(self, tau):
+        self.tau.data = torch.tensor(tau)
 
 class Final_Model(nn.Module):
     def __init__(self, backbone, postprocessing = None):
@@ -519,7 +525,7 @@ class Final_Model(nn.Module):
         return out, uncertainty
 
 class Uncertainty_Wrapper(nn.Module):
-    def __init__(self, base_model, n_classes):
+    def __init__(self, base_model, n_classes, return_uncertainty=False, uncertainty_model="variance"):
         super(Uncertainty_Wrapper, self).__init__()
 
         if hasattr(base_model, 'classifier'):
@@ -529,15 +535,31 @@ class Uncertainty_Wrapper(nn.Module):
 
         self.base_model = base_model
         self.n_classes = n_classes
+        self.return_uncertainty = return_uncertainty
+        self.uncertainty_model = uncertainty_model
         self.bins = np.array([-np.inf] + list(np.linspace(0, 1, n_classes-1)) + [np.inf])
 
     def forward(self, x):
 
         out, feat = self.base_model(x)
-        #probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out))
+
+        if self.return_uncertainty:
+            uncertainty = self._compute_uncertainty(out)
+            return out, uncertainty
 
         return out, feat
 
+    def _compute_uncertainty(self, probs):
+        probs = probs.detach().cpu()
+        if self.uncertainty_model == 'entropy':
+            return -torch.sum(probs * torch.log(probs), dim=1)
+        elif self.uncertainty_model == 'variance':
+            bins = np.linspace(0, 1, self.n_classes)
+            E_x = torch.sum(probs * bins[None, :], axis=1)
+            E_x2 = torch.sum(probs * bins[None, :] ** 2, axis=1)
+            return torch.sqrt(E_x2 - E_x**2)
+        else:
+            raise NotImplementedError
 
 class MC_Dropout_Wrapper(Uncertainty_Wrapper):
     def __init__(self, base_model, n_classes=64, n_samples=100):
@@ -563,6 +585,11 @@ class MC_Dropout_Wrapper(Uncertainty_Wrapper):
         # Calculate mean and uncertainty
         probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
         probs = probs.to(x.device)
+
+        if self.return_uncertainty:
+            uncertainty = self._compute_uncertainty(probs)
+            return probs, uncertainty
+
         return probs, feat
         
 
@@ -585,6 +612,11 @@ class BNN_Wrapper(Uncertainty_Wrapper):
         # Calculate mean and uncertainty
         probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
         probs = probs.to(x.device)
+
+        if self.return_uncertainty:
+            uncertainty = self._compute_uncertainty(probs)
+            return probs, uncertainty
+    
         return probs, None
 
 class Projector(nn.Module):

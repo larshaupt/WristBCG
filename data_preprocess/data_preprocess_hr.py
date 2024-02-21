@@ -17,6 +17,7 @@ import json
 from scipy.signal import resample
 from scipy.interpolate import interp1d
 from scipy.stats import rankdata
+import julius
 
 NUM_FEATURES = 1
 
@@ -144,6 +145,9 @@ def preprocess():
     print('preprocessing done!')
 
 def subsample_by_index(x,y, d, random_indices, ratio):
+    # Subsamples the data by the given indices
+    # The indices are given in a dictionary, where the key is the subject id and the value is an array of indices
+    # The ratio is the fraction of samples to keep
     pids = np.unique(d[:,0])
 
     for pid in pids:
@@ -164,10 +168,30 @@ def load_random_indices(data_path):
         random_indices = cp.load(f)
     return random_indices
     
-def load_data(data_path, split=0,  subsample=1.0, reconstruction=False, subsample_ranked_train=False, subsample_ranked_val=False):
+def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=False, take_every_nth_train=1, take_every_nth_test=1):
+
+    if args is not None: # taking the parameters from the args
+        subsample_ranked_train = args.subsample_ranked_train
+        subsample_ranked_val = args.subsample_ranked_val
+        data_thr_avg = args.data_thr_avg
+        data_thr_max = args.data_thr_max
+        data_thr_angle = args.data_thr_angle
+        data_thr_hr = args.data_thr_hr
+
+    else: # if the args are not given, then the parameters are set to None, i.e. the data is not subsampled
+        subsample_ranked_train = None
+        subsample_ranked_val = None
+        data_thr_avg = None
+        data_thr_max = None
+        data_thr_angle = None
+        data_thr_hr = None
 
 
     def load_pickle(path):
+
+        if not os.path.exists(path):
+            FileNotFoundError(f"File {path} does not exist")
+
         with open(path, 'rb') as f:
             data = cp.load(f)
         return data
@@ -221,6 +245,18 @@ def load_data(data_path, split=0,  subsample=1.0, reconstruction=False, subsampl
 
         return y
     
+    def filter_by_metric(metrics, thr_avg, thr_max, thr_angle, thr_hr):
+        mask = np.ones_like(metrics[:,0], dtype=bool)
+        if thr_avg != None and thr_avg != 0:
+            mask = mask* (metrics[:,0] < thr_avg)
+        if thr_max != None and thr_max != 0:
+            mask = mask* (metrics[:,1] < thr_max)
+        if thr_angle != None and thr_angle != 0:
+            mask = mask* (metrics[:,2] < thr_angle)
+        if thr_hr != None and thr_hr != 0:
+            mask = mask* (metrics[:,3] < thr_hr)
+        return mask
+    
 
     split_path = os.path.join(data_path, "splits.json")
     with open(split_path, 'r') as f:
@@ -239,6 +275,24 @@ def load_data(data_path, split=0,  subsample=1.0, reconstruction=False, subsampl
         y_train = load_reconstruction_signal(train, data_path)
         y_val = load_reconstruction_signal(val, data_path)
         y_test = load_reconstruction_signal(test, data_path)
+
+    if take_every_nth_train != 1:
+        x_train = x_train[::take_every_nth_train]
+        y_train = y_train[::take_every_nth_train]
+        d_train = d_train[::take_every_nth_train]
+        metrics_train = metrics_train[::take_every_nth_train]
+
+    if take_every_nth_test != 1:
+        x_test = x_test[::take_every_nth_test]
+        y_test = y_test[::take_every_nth_test]
+        d_test = d_test[::take_every_nth_test]
+        metrics_test = metrics_test[::take_every_nth_test]
+
+        x_val = x_val[::take_every_nth_test]
+        y_val = y_val[::take_every_nth_test]
+        d_val = d_val[::take_every_nth_test]
+        metrics_val = metrics_val[::take_every_nth_test]
+
 
     if subsample_ranked_train != None and subsample_ranked_train != 0 and subsample_ranked_train != 1.0:
         best_ind_train = rank_metrics(metrics_train)
@@ -261,14 +315,34 @@ def load_data(data_path, split=0,  subsample=1.0, reconstruction=False, subsampl
         d_test = d_test[best_ind_test[:num_values]]
 
 
+    mask_train = filter_by_metric(metrics_train, data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr)
+    mask_val = filter_by_metric(metrics_val, data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr)
+    mask_test = filter_by_metric(metrics_test, data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr)
+
+    print(f"Discarded {mask_train.sum()/len(mask_train)*100:.2f}% of training data")
+    print(f"Discarded {mask_val.sum()/len(mask_val)*100:.2f}% of validation data")
+    print(f"Discarded {mask_test.sum()/len(mask_test)*100:.2f}% of test data")
+
+    x_train = x_train[mask_train]
+    y_train = y_train[mask_train]
+    d_train = d_train[mask_train]
+
+    x_val = x_val[mask_val]
+    y_val = y_val[mask_val]
+    d_val = d_val[mask_val]
+
+    x_test = x_test[mask_test]
+    y_test = y_test[mask_test]
+    d_test = d_test[mask_test]
+
     d_train = d_train.astype(float)
     d_val = d_val.astype(float)
     d_test = d_test.astype(float)
 
     if subsample != 1.0:
 
-        random_indices = load_random_indices(data_path)
-        x_train, y_train, d_train = subsample_by_index(x_train, y_train, d_train, random_indices, subsample)
+        subsample_indices = load_random_indices(data_path)
+        x_train, y_train, d_train = subsample_by_index(x_train, y_train, d_train, subsample_indices, subsample)
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
@@ -320,56 +394,137 @@ def load_data_no_labels(data_path, split:int=0, subsample=1.0, reconstruction=Fa
     
     if subsample != 1.0:
 
-        random_indices = load_random_indices(data_path)
-        x_train, y_train, d_train = subsample_by_index(x_train, y_train, d_train, random_indices, subsample)
+        subsample_indices = load_random_indices(data_path)
+
+        x_train, y_train, d_train = subsample_by_index(x_train, y_train, d_train, subsample_indices, subsample)
 
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
-def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.0, reconstruction=False, sample_sequences:bool=False, discrete_hr:bool=False, sigma=None):
+def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=False, sample_sequences:bool=False, discrete_hr:bool=False, sigma=None):
     if dataset is None:
         dataset = args.dataset
     if split is None:
         split = args.split
 
     if dataset == 'max':
-        data_path = config.data_dir_Max_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+        sampling_rate = 100
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_Max_processed
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+        
     elif dataset == 'apple':
-        data_path = config.data_dir_Apple_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+        sampling_rate = 50
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_Apple_processed
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+    
     elif dataset == 'm2sleep':
-        data_path = config.data_dir_M2Sleep_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+        sampling_rate = 32
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_M2Sleep_processed
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+    
     elif dataset == 'capture24':
-        data_path = config.data_dir_Capture24_processed
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+        if args.sampling_rate == 100 or args.sampling_rate == 0:
+            sampling_rate = 100
+            if args.step_size == 8 and args.window_size == 10:
+                data_path = config.data_dir_Capture24_processed
+                x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+            
+            else:
+                raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+        elif args.sampling_rate == 125:
+            sampling_rate = 125
+            if args.step_size == 6 and args.window_size == 8:
+                data_path = config.data_dir_Capture24_processed_125Hz_8w
+                x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+            else:
+                raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+        else:
+            raise ValueError(f"Invalid sampling rate {args.sampling_rate} for dataset {dataset}")
+    
     elif dataset == 'apple100':
+        sampling_rate = 100
         # take the dataset, that has a couple of metrics for each window
         # the dataset with metrics is computed a little differently, so there might be differences
         if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
-            data_path = config.data_dir_Apple_processed_100hz
+            if args.step_size == 8 and args.window_size == 10:
+                data_path = config.data_dir_Apple_processed_100hz
+            elif args.step_size == 4 and args.window_size == 5:
+                data_path = config.data_dir_Apple_processed_100hz_5w_4s
+            elif args.step_size == 4 and args.window_size == 8:
+                data_path = config.data_dir_Apple_processed_100hz_8w_4s
+            elif args.step_size == 4 and args.window_size == 10:
+                data_path = config.data_dir_Apple_processed_100hz_10w_4s
+            elif args.step_size == 4 and args.window_size == 30:
+                data_path = config.data_dir_Apple_processed_100hz_30w_4s
+            elif args.step_size == 4 and args.window_size == 60:
+                data_path = config.data_dir_Apple_processed_100hz_60w_4s
+            elif args.step_size == 1 and args.window_size == 10:
+                data_path = config.data_dir_Apple_processed_100hz_10w_1s
+            else:
+                raise ValueError(f"Invalid step size {args.step_size} for dataset {dataset}")
+        else: # load the dataset with metrics
+            if args.step_size == 8 and args.window_size == 10:
+                data_path = config.data_dir_Apple_processed_100hz_wmetrics
+            else:
+                raise ValueError(f"Invalid step size {args.step_size} for dataset {dataset}")
+            
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, take_every_nth_train=args.take_every_nth_train, take_every_nth_test=args.take_every_nth_test)
+    
+    elif dataset == 'appleall':
+        sampling_rate = 100
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_Apple_processed_all
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
         else:
-            data_path = config.data_dir_Apple_processed_100hz_wmetrics
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+    
     elif dataset == 'm2sleep100':
-        data_path = config.data_dir_M2Sleep_processed_100Hz
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
-    elif dataset == "parkinson100":
-        # take the dataset that has a couple of metrics for each window
-        # will change results
-        if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
-            data_path = config.data_dir_Parkinson_processed_100Hz
+        sampling_rate = 100
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_M2Sleep_processed_100Hz
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
         else:
-            data_path = config.data_dir_Parkinson_processed_100Hz_wmetrics
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction, subsample_ranked_train=args.subsample_ranked_train, subsample_ranked_val=args.subsample_ranked_val)
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+    
+    elif dataset == "parkinson100":
+        sampling_rate = 100
+        if args.step_size == 8 and args.window_size == 10:
+            # take the dataset that has a couple of metrics for each window
+            # will change results
+            if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
+                data_path = config.data_dir_Parkinson_processed_100Hz
+            else:
+                data_path = config.data_dir_Parkinson_processed_100Hz_wmetrics
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+
+    elif dataset == "IEEE":
+        sampling_rate = 125
+        if args.window_size == 8:
+            data_path = config.data_dir_IEEE_processed
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+    
+    else:
+        raise ValueError(f"Invalid dataset {dataset}")
 
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
-    if resampling_rate != 1:
-        x_train, y_train, d_train = resample_data(x_train, y_train, d_train, resampling_rate)
-        x_val, y_val, d_val = resample_data(x_val, y_val, d_val, resampling_rate)
-        x_test, y_test, d_test = resample_data(x_test, y_test, d_test, resampling_rate)
+    if args.sampling_rate != sampling_rate and args.sampling_rate != 0:
+        x_train, y_train, d_train = resample_data(x_train, y_train, d_train, sampling_rate, args.sampling_rate)
+        x_val, y_val, d_val = resample_data(x_val, y_val, d_val, sampling_rate, args.sampling_rate)
+        x_test, y_test, d_test = resample_data(x_test, y_test, d_test, sampling_rate, args.sampling_rate)
         
     if args.normalize:
         x_train = normalize_samples(x_train)
@@ -422,15 +577,22 @@ def prep_hr(args, dataset=None, split=None, resampling_rate=1, subsample_rate=1.
 
     return train_loader, val_loader, test_loader
 
-def resample_data(x, y, d, resampling_rate):
-    x_resampled = resample(x, int(x.shape[0]/resampling_rate), axis=1)
+def resample_data(x, y, d, fs, fs_new):
+
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    resample = julius.ResampleFrac(fs, fs_new).to(DEVICE)
+
     time_vector = np.arange(0, x.shape[1], 1)
-    time_vector_resampled = np.arange(0, x.shape[1], 1/resampling_rate)
-    f_y = interp1d(time_vector, y, axis=1)
+    time_vector_resampled = np.arange(0, x.shape[1], fs/fs_new)
     f_d = interp1d(time_vector, d, axis=1)
-    y_resampled = f_y(time_vector_resampled, kind='linear', copy=False, fill_value="extrapolate")
-    d_resampled = f_d(time_vector_resampled, kind='previous', copy=False, fill_value="extrapolate")
-    return x_resampled, y_resampled, d_resampled
+    d = f_d(time_vector_resampled, kind='previous', copy=False, fill_value="extrapolate")
+
+    x = resample(torch.Tensor(x).to(DEVICE).float()).cpu().numpy()
+    y = resample(torch.Tensor(y).to(DEVICE).float()).cpu().numpy()
+    d = resample(torch.Tensor(d).to(DEVICE).float()).cpu().numpy()
+
+
+    return x, y, d
 
 
 

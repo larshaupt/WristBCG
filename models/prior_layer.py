@@ -23,7 +23,8 @@ class PriorLayer(nn.Module):
         :param kwargs: passed to parent class
         """
         super(PriorLayer, self).__init__()
-        self.state = nn.Parameter(torch.tensor(np.ones(dim) / dim, dtype=torch.float32), requires_grad=False)
+        self.state_prior = torch.tensor(np.ones(dim) / dim, dtype=torch.float32)
+        self.state = nn.Parameter(self.state_prior.clone(), requires_grad=False)
         self.dim = dim
         self.method = method
         self.transition_prior = nn.Parameter(torch.zeros((self.dim, self.dim), dtype=torch.float32), requires_grad=False)
@@ -57,7 +58,7 @@ class PriorLayer(nn.Module):
             mu, sigma = norm.fit(diffs)
         return mu, sigma
 
-    def fit_layer(self, ys, distr="laplace", sparse=False):
+    def fit_layer(self, ys, distr="laplace", sparse=False, learn_state_prior=False):
         """
         Precomputes a prior matrix based on heart rate changes.
         :param ys: list of ground truth HR values with same strides as labels
@@ -96,6 +97,11 @@ class PriorLayer(nn.Module):
                         )
 
         # no need for normalization, probability leaks are handled during forward propagation
+                        
+        if learn_state_prior:
+            state_prior = torch.concat(ys).sum(0)
+            state_prior = state_prior / state_prior.sum()
+            self.state_prior = state_prior.to(torch.float32)
 
     def _propagate_sumprod(self, ps):
         """
@@ -104,12 +110,14 @@ class PriorLayer(nn.Module):
         :param ps: ps: tf.tensor of shape (n_samples, n_bins) containing probabilities
         :return: tf.tensor of same shape containing updated probabilities
         """
+        # Since we assume that every batch is indipendent of the others, we can reset the state at the beginning of each batch
+        self.state.data = self.state_prior.clone().to(ps.device)
         output = []
         for p in ps:
             # propagate (blurred) last observations
             p_prior = torch.matmul(self.transition_prior, self.state)
             # add current observations
-            p_new = p_prior * p
+            p_new = (p_prior * p) + 1e-10
             self.state.data = p_new / torch.sum(p_new)
             output.append(self.state.clone().detach())
         return torch.stack(output)
@@ -122,9 +130,25 @@ class PriorLayer(nn.Module):
             return self.forward_viterbi(ps)
         elif method == "raw":
             # return input
-            return ps,_
+            return self.forward_raw(ps)
         else:
             raise NotImplementedError(f"Unknown method: {method}")
+        
+    def forward_raw(self, ps):
+        """
+        Returns the raw input probabilities.
+        :param ps: tf.tensor of shape (n_samples, n_bins) containing probabilities
+        :return: probs : tf.tensor of same shape, only returned if return_probs=True
+                 E_x : tf.tensor of shape (n_samples,) containing the expected HR, only if return_probs=False
+                 uncert : tf.tensor of shape (n_samples,) containing est. uncertainty of the prediction
+        """
+        uncert = self._compute_uncertainty(ps)
+        E_x = self._compute_expectation(ps)
+        if self.return_probs:
+            return E_x, uncert, ps
+        else:
+            
+            return E_x, uncert
 
     def forward_sumprod(self, ps):
         """
@@ -139,16 +163,10 @@ class PriorLayer(nn.Module):
 
         E_x = torch.sum(probs * self.bins[None, :], axis=1)
 
-        if self.uncert == "std":
-            E_x2 = torch.sum(probs * self.bins[None, :] ** 2, axis=1)
-            uncert = torch.sqrt(E_x2 - E_x**2)
-        elif self.uncert == "entropy":
-            uncert = -torch.sum(probs * torch.log(probs + 1e-10), axis=1)
-        else:
-            raise NotImplementedError(f"Unknown uncertainty measure: {self.uncert}")
+        uncert = self._compute_uncertainty(probs)
 
         if self.return_probs:
-            return probs, uncert
+            return E_x, uncert, ps
         else:
             return E_x, uncert
     
@@ -195,6 +213,9 @@ class PriorLayer(nn.Module):
 
         best_path.append(curr_ix)
 
+        if self.return_probs:
+            return torch.tensor([self.hr(x) for x in reversed(best_path)], dtype=torch.float32), None, None
+
         return torch.tensor([self.hr(x) for x in reversed(best_path)], dtype=torch.float32), None
 
     def get_config(self):
@@ -211,6 +232,23 @@ class PriorLayer(nn.Module):
         }
         return config
     
+    def _compute_expectation(self, probs):
+        E_x = torch.sum(probs * self.bins[None, :], axis=1)
+        return E_x
+    
+    def _compute_uncertainty(self, probs):
+        if self.uncert == "std":
+            E_x = self._compute_expectation(probs)
+            E_x2 = torch.sum(probs * self.bins[None, :] ** 2, axis=1)
+            uncert = torch.sqrt(E_x2 - E_x**2)
+        elif self.uncert == "entropy":
+            uncert = -torch.sum(probs * torch.log(probs + 1e-10), axis=1)
+        else:
+            raise NotImplementedError(f"Unknown uncertainty measure: {self.uncert}")
+        
+        return uncert
+
+
 
 
 

@@ -11,7 +11,7 @@ from models.frameworks import *
 from models.backbones import *
 from models.loss import *
 from models.prior_layer import PriorLayer
-from data_preprocess import data_preprocess_hhar, data_preprocess_hr
+from data_preprocess import data_preprocess_hr
 from torchmetrics.regression import LogCoshError
 from bayesian_torch.models.dnn_to_bnn import get_kl_loss
 
@@ -72,7 +72,7 @@ def setup_dataloaders(args, pretrain=False, sample_sequences=False, discrete_hr=
         reconstruction = False
 
 
-    train_loader, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split, resampling_rate=args.resampling_rate, subsample_rate=subsample_rate, reconstruction=reconstruction, sample_sequences=sample_sequences, discrete_hr=discrete_hr, sigma=sigma)
+    train_loader, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split, subsample_rate=subsample_rate, reconstruction=reconstruction, sample_sequences=sample_sequences, discrete_hr=discrete_hr, sigma=sigma)
     
 
     return train_loader, val_loader, test_loader
@@ -208,27 +208,11 @@ def setup(args, DEVICE):
     else:
         assert args.loss == 'CrossEntropy'
 
-    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100"]:
+    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall"]:
         args.n_feature = 3
 
-    if args.dataset in ['max', 'apple100', 'capture24', 'm2sleep100', "parkinson100"]:
-        sampling_rate = 100
-    elif args.dataset in ['apple']:
-        sampling_rate = 50
-    elif args.dataset in ['m2sleep']:
-        sampling_rate = 32
 
-
-    # sets the resampling ratio
-    if args.sampling_rate == 0 or args.sampling_rate == sampling_rate: 
-        # no resampling
-        args.resampling_rate = 1
-    else:
-        print(f"Resampling from {sampling_rate}Hz to {sampling_rate*args.sampling_rate}Hz")
-        # resampling
-        args.resampling_rate = args.sampling_rate / sampling_rate
-
-    args.input_length = 10*sampling_rate*args.resampling_rate
+    args.input_length = args.window_size*args.sampling_rate
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -261,9 +245,13 @@ def setup(args, DEVICE):
 
     model_name_opt = ""
     model_name_opt += f"_pretrain_subsample_{args.pretrain_subsample:.3f}"  if args.pretrain_subsample != 1 else ""
+    model_name_opt += f"_windowsize_{args.window_size}" if args.window_size != 10 else ""
+    model_name_opt += f"_stepsize_{args.step_size}" if args.step_size != 8 else ""
+    model_name_opt += f"_szfactor_test_{args.take_every_nth_test}" if args.take_every_nth_test != 1 else ""
+    model_name_opt += f"_szfactor_train_{args.take_every_nth_train}" if args.take_every_nth_train != 1 else ""
     args.model_name = 'try_scheduler_' + args.framework + '_backbone_' + args.backbone +'_pretrain_' + args.pretrain_dataset + '_eps' + str(args.n_epoch) + '_lr' + str(args.lr_pretrain) + '_bs' + str(args.pretrain_batch_size) \
                       + '_aug1' + args.aug1 + '_aug2' + args.aug2 + '_dim-pdim' + str(args.p) + '-' + str(args.phid) \
-                      + '_EMA' + str(args.EMA) + '_criterion_' + args.criterion + '_lambda1_' + str(args.lambda1) + '_lambda2_' + str(args.lambda2) + '_tempunit_' + args.temp_unit + model_name_opt
+                      + '_EMA' + str(args.EMA) + '_criterion_' + args.criterion + '_lambda1_' + str(args.lambda1) + '_lambda2_' + str(args.lambda2) + '_tempunit_' + args.temp_unit  +  model_name_opt
 
 
     # set model saving paths
@@ -273,15 +261,15 @@ def setup(args, DEVICE):
     args.pretrain_model_file = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name  + "_bestmodel" + '.pt')
 
     lincl_model_name_opt = ""
-    lincl_model_name_opt += f"_bnn" if args.model_uncertainty == "bnn" else ""
-    lincl_model_name_opt += f"_bnn_pretrained" if args.model_uncertainty == "bnn_pretrained" else ""
-    lincl_model_name_opt += f"_bnn_pretrained_firstlast" if args.model_uncertainty == "bnn_pretrained_firstlast" else ""
+    lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty != "none" else ""
     lincl_model_name_opt += f"_trainranked_{args.subsample_ranked_train}" if args.subsample_ranked_train not in [None, 0.0] else ""
     lincl_model_name_opt += f"_subsample_{args.subsample:.3f}" if args.subsample != 1 else ""
     lincl_model_name_opt += f"_disc_hr_{args.n_class}" if args.discretize_hr else ""
-    lincl_model_name_opt += f"_lr_{args.lr_finetune_backbone:.3f}" if args.lr_finetune_backbone != args.lr else ""
-    lincl_model_name_opt += f"_lr_lstm_{args.lr_finetune_lstm:.3f}" if args.lr_finetune_lstm != args.lr_finetune_backbone else ""
-    lincl_model_name = 'lincls_'+ lincl_model_name_opt + args.backbone + '_dataset_' + args.dataset + '_split' + str(args.split) + '_eps' + str(args.n_epoch) + '_bs' + str(args.batch_size) + "_bestmodel" + '.pt'
+    lincl_model_name_opt += f"_lr_{args.lr_finetune_backbone:.1E}" if args.lr_finetune_backbone != args.lr else ""
+    lincl_model_name_opt += f"_lr_lstm_{args.lr_finetune_lstm:.1E}" if args.lr_finetune_lstm != args.lr_finetune_backbone else ""
+    lincl_model_name_opt += f"_hrmin_{args.hr_min}" if args.hr_min != 50 else ""
+    lincl_model_name_opt += f"_hrmax_{args.hr_max}" if args.hr_max != 110 else ""
+    lincl_model_name = 'lincls'+ lincl_model_name_opt + "_" + args.backbone + '_dataset_' + args.dataset + '_split' + str(args.split) + '_eps' + str(args.n_epoch) + '_bs' + str(args.batch_size) + "_bestmodel" + '.pt'
 
     args.lincl_model_file = os.path.join(args.model_dir_name, lincl_model_name)
     
@@ -618,7 +606,7 @@ def add_probability_wrapper(model, args, DEVICE):
         model = MC_Dropout_Wrapper(model, n_classes = args.n_prob_class, n_samples = 100)
         model = model.to(DEVICE)
     elif args.model_uncertainty in ["bnn", "bnn_pretrained", "bnn_pretrained_firstlast"]:
-        model = BNN_Wrapper(model, n_classes=args.n_prob_class)
+        model = BNN_Wrapper(model, n_classes=args.n_prob_class, n_samples=100)
         model = model.to(DEVICE)
     else:
         model = Uncertainty_Wrapper(model, n_classes=args.n_prob_class)
@@ -628,7 +616,8 @@ def add_probability_wrapper(model, args, DEVICE):
 
 
 def convert_to_hr(values, args):
-    values = values.cpu().numpy()
+    if isinstance(values, torch.Tensor):
+        values = values.cpu().numpy()
 
 
     if values.ndim > 1 and values.shape[1] > 1:
@@ -646,7 +635,7 @@ def convert_to_hr(values, args):
 
 def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, optimizer, criterion, args):
     best_model = None
-    min_val_loss = 1e8
+    min_val_corr = 0
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.n_epoch, eta_min=0)
 
@@ -729,8 +718,8 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                 logger.debug(f'Val Loss     : {val_loss:.4f}, Val MAE     : {mae_val:.4f}, Val Corr     : {corr_val:.4f}\n')
                 wandb.log({'Val_Loss': val_loss, 'Val_MAE': mae_val, 'Val_Corr': corr_val}, step=epoch)
 
-                if val_loss <= min_val_loss:
-                    min_val_loss = val_loss
+                if corr_val <= min_val_corr:
+                    min_val_corr = corr_val
                     best_model = copy.deepcopy(trained_backbone.state_dict())
                     torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, args.lincl_model_file)
                     print('Saving models and results at {} epoch to {}'.format(epoch, args.lincl_model_file))
