@@ -113,3 +113,26 @@ def extract_hr_peaks(signal, fs):
         return np.nan
     hr = 60*fs/np.mean(rr)
     return hr
+
+
+def single_channel_butterworth_bandpass(signal, fs, low, high, order=4):
+    """
+    Apply Butterworth bandpass filter to a single channel of signal data.
+
+    Args:
+    - signal (array-like): Single-channel signal data.
+    - fs (float): Sampling frequency of the signal.
+    - low (float): Low cutoff frequency of the bandpass filter in Hz.
+    - high (float): High cutoff frequency of the bandpass filter in Hz.
+    - order (int, optional): Order of the Butterworth filter. Default is 4.
+
+    Returns:
+    - filtered_signal (array-like): Filtered single-channel signal data.
+    """
+    if fs/2 <= high:
+        print("Warning: Sampling frequency is too low for the specified high cutoff frequency. Consider increasing the sampling frequency or decreasing the high cutoff frequency.")
+        sos = butter(order, low, btype='highpass', fs=fs, output='sos')
+    else:
+        sos = butter(order, [low, high], btype='bandpass', fs=fs, output='sos')
+    filtered = sosfiltfilt(sos, signal)
+    return filtered

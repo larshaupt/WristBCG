@@ -1,12 +1,15 @@
 #%%
 import torch
 from torch import nn
-from .attention import *
-from .MMB import *
 import matplotlib.pyplot as plt
 import os
 import numpy as np
 
+#%%
+from .attention import *
+from .MMB import *
+
+#%%
 class FCN(nn.Module):
     def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
         super(FCN, self).__init__()
@@ -65,10 +68,10 @@ class FCN(nn.Module):
         self.classifier = classifier
         self.backbone = False
 
-
+#%%
 class CorNET(nn.Module):
     # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
-    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True):
+    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True, rnn_type="lstm"):
         super(CorNET, self).__init__()
         # vector size after a convolutional layer is given by:
         # (input_size - kernel_size + 2 * padding) / stride + 1
@@ -93,10 +96,22 @@ class CorNET(nn.Module):
         out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
         self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
         # should be 50 with default parameters
-
-        self.lstm = nn.LSTM(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2)
-
-        self.out_dim = LSTM_units
+        
+        if rnn_type == "lstm":
+            self.lstm = nn.LSTM(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2, bidirectional=False)
+            self.out_dim = LSTM_units
+        elif rnn_type == "lstm_bi":
+            self.lstm = nn.LSTM(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        elif rnn_type == "gru":
+            self.lstm = nn.GRU(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2, bidirectional=False)
+            self.out_dim = LSTM_units
+        elif rnn_type == "gru_bi":
+            self.lstm = nn.GRU(input_size=conv_kernels, hidden_size=LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        else:
+            raise NotImplementedError
+        
 
         if backbone == False:
             self.classifier = nn.Linear(LSTM_units, n_classes) 
@@ -179,7 +194,7 @@ class DeepConvLSTM(nn.Module):
     def set_classification_head(self, classifier):
         self.classifier = classifier
         self.backbone = False
-
+#%%
 class LSTM(nn.Module):
     def __init__(self, n_channels, n_classes, LSTM_units=128, backbone=True):
         super(LSTM, self).__init__()
@@ -512,18 +527,26 @@ class Classifier(nn.Module):
     def set_temperature(self, tau):
         self.tau.data = torch.tensor(tau)
 
-class Final_Model(nn.Module):
-    def __init__(self, backbone, postprocessing = None):
-        super(Final_Model, self).__init__()
-        self.backbone = backbone
-        self.postprocessing = postprocessing
+
+class Classifier_with_uncertainty(nn.Module):
+    def __init__(self, bb_dim, n_classes):
+        super(Classifier_with_uncertainty, self).__init__()
+        self.n_classes = n_classes
+        self.classifier = nn.Linear(bb_dim, n_classes)
+        self.uncertainty = nn.Linear(bb_dim, 1)
 
     def forward(self, x, method=None):
-        out, x = self.backbone(x)
-        if self.postprocessing is not None:
-            out, uncertainty = self.postprocessing(out, method=method)
-        return out, uncertainty
+        x = x.reshape(x.shape[0], -1)
+        out = self.classifier(x)
 
+        if self.n_classes > 1:
+            out = self.softmax(out)
+            
+        uncertainty = self.uncertainty(x)
+
+        return torch.concat((out, uncertainty), dim=-1)
+    
+    
 class Uncertainty_Wrapper(nn.Module):
     def __init__(self, base_model, n_classes, return_uncertainty=False, uncertainty_model="variance"):
         super(Uncertainty_Wrapper, self).__init__()
@@ -560,6 +583,38 @@ class Uncertainty_Wrapper(nn.Module):
             return torch.sqrt(E_x2 - E_x**2)
         else:
             raise NotImplementedError
+        
+class NLE_Wrapper(Uncertainty_Wrapper):
+    def __init__(self, base_model, n_classes, return_uncertainty=False, uncertainty_model="variance"):
+        super(NLE_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_uncertainty=return_uncertainty, uncertainty_model=uncertainty_model)
+        assert self.uncertainty_model == 'variance', 'NLE only supports variance as uncertainty model'
+        self.bins = torch.Tensor(self.bins)
+    def forward(self, x):
+        out, feat = self.base_model(x)
+
+        uncertainty = out[...,1].unsqueeze(-1)
+        out = out[...,0].unsqueeze(-1)
+
+        if not self.return_uncertainty:
+            probs = self._compute_probs(out, uncertainty)
+            return probs, feat
+        return uncertainty, feat
+    
+    def _compute_probs(self, out, uncertainty):
+        device = out.device
+        out = out.detach().cpu()
+        uncertainty = uncertainty.detach().cpu()
+        sigma = torch.sqrt(torch.exp(uncertainty))
+
+        def gaussian_cdf(x, mu, sigma):
+            return 0.5 * (1 + torch.erf((x - mu) / (sigma * np.sqrt(2))))
+
+        cdf_values = gaussian_cdf(self.bins, out, sigma)
+        bin_probs = cdf_values[:, 1:] - cdf_values[:, :-1]
+
+        return bin_probs.to(device)
+
+
 
 class MC_Dropout_Wrapper(Uncertainty_Wrapper):
     def __init__(self, base_model, n_classes=64, n_samples=100):
@@ -1386,3 +1441,317 @@ class BayesianCorNET(nn.Module):
                 self.classifier.classifier = bnn_linear_layer(self.const_bnn_prior_parameters, self.classifier.classifier).to(next(self.parameters()).device)
             except:
                 print("Could not transform the classification layer into a bayesian layer")
+
+#%%
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+import math
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+class PositionalEncoding(nn.Module):
+    """
+    Implements functionality for additive periodic positional encoding.
+    Directly adapted from https://www.tensorflow.org/text/tutorials/transformer.
+    """
+    def __init__(self, seqlen, d_model, num_dims=3):
+        """
+        Initialize the positional encoding layer.
+        Assumes the input has shape (batch, blocks, inner) or (batch, _ , blocks, inner)
+        :param seqlen: length of the sequence = number of blocks
+        :param d_model: dimension of the encoding (needs to match block size)
+        :param num_dims: number of input dimensions to enable easy broadcasting
+        """
+        super(PositionalEncoding, self).__init__()
+        self.seqlen = seqlen
+        self.d_model = d_model
+        self.num_dims = num_dims
+        self.pos_encoding = self._positional_encoding(seqlen, d_model)
+
+    def _positional_encoding(self, length, depth):
+        """
+        Generate the constant matrices representing the encoding
+        :param length: number of blocks
+        :param depth: block dimension
+        :return:
+        """
+        depth = depth / 2
+
+        positions = torch.arange(length).unsqueeze(1)  # (seq, 1)
+        depths = torch.arange(depth).unsqueeze(0) / depth  # (1, depth)
+
+        angle_rates = 1 / (10000 ** depths)  # (1, depth)
+        angle_rads = positions * angle_rates  # (pos, depth)
+
+        pos_encoding = torch.cat([torch.sin(angle_rads), torch.cos(angle_rads)], dim=-1)
+
+        return pos_encoding.float()
+
+    def forward(self, x):
+        """
+        Performs a (symbolic) forward pass
+        :param x: torch.tensor of shape (..., n_blocks, block_size)
+        :return: torch.tensor of same shape
+        """
+        # This factor sets the relative scale of the embedding and positonal_encoding.
+        x *= torch.sqrt(torch.tensor(self.d_model, dtype=torch.float32))
+        if self.num_dims == 3:
+            x = x + self.pos_encoding.unsqueeze(0).unsqueeze(0)
+        else:
+            x = x + self.pos_encoding.unsqueeze(0)
+        return x
+    
+class DoubleAttention(nn.Module):
+    def __init__(self, n_frames, n_bins, channels):
+        super(DoubleAttention, self).__init__()
+        self.conv1 = nn.Conv1d(channels, channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout(0.1)
+        self.positional_encoding_freq = PositionalEncoding(n_bins, channels)
+        self.positional_encoding_time = PositionalEncoding(n_frames, channels)
+        self.attention = Attention()
+
+    def forward(self, inp):
+        x1 = F.leaky_relu(self.conv1(inp))
+        x1 = self.dropout(x1)
+        x1 = F.leaky_relu(self.conv2(x1))
+        x1 = self.dropout(x1)
+
+        x1_freq = self.positional_encoding_freq(x1)
+        freq_attn = self.attention(x1_freq, x1_freq)
+
+        x1_time = self.positional_encoding_time(x1.permute(0, 3, 1, 2))
+        time_attn = self.attention(x1_time, x1_time.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+
+        return time_attn, freq_attn
+    
+class Attention(nn.Module):
+    def __init__(self):
+        super(Attention, self).__init__()
+
+    def forward(self, query, key):
+        energy = torch.bmm(query, key.permute(0, 3, 1, 2))
+        attention = F.softmax(energy, dim=-1)
+        return torch.bmm(attention, key)
+
+class AttentionBlock1D(nn.Module):
+    def __init__(self, inter_channel):
+        super(AttentionBlock1D, self).__init__()
+        self.theta_x = nn.Conv1d(inter_channel, 1, kernel_size=1, stride=1)
+        self.phi_g = nn.Conv1d(inter_channel, 1, kernel_size=1, stride=1)
+        self.f = nn.ReLU()
+        self.psi_f = nn.Conv1d(1, 1, kernel_size=1, stride=1)
+        self.rate = nn.Sigmoid()
+
+    def forward(self, x, g):
+        theta_x = self.theta_x(x)
+        phi_g = self.phi_g(g)
+        f = self.f(theta_x + phi_g)
+        psi_f = self.psi_f(f)
+        rate = self.rate(psi_f)
+        att_x = x * rate
+        return att_x
+
+class AttentionUpAndConcat(nn.Module):
+    def __init__(self, down_fac):
+        super(AttentionUpAndConcat, self).__init__()
+        self.down_fac = down_fac
+        self.up = nn.Upsample(scale_factor=down_fac, mode='linear', align_corners=True)
+
+    def forward(self, down_layer, layer):
+        up = self.up(down_layer)
+        # Assuming data_format='channels_last'
+        in_channel = down_layer.size(1)
+        att_block = AttentionBlock1D(in_channel // 4)
+        layer = att_block(layer, up)
+        concate = torch.cat([up, layer], dim=1)
+        return concate
+
+class HybridUNet(nn.Module):
+    def __init__(self, depth, attn_channels, init_channels, down_fac, use_time_backbone, n_frames, n_bins, channels):
+        super(HybridUNet, self).__init__()
+        self.depth = depth
+        self.attn_channels = attn_channels
+        self.init_channels = init_channels
+        self.down_fac = down_fac
+        self.use_time_backbone = use_time_backbone
+        self.double_attn = DoubleAttention(n_frames, n_bins, channels)
+
+    def forward(self, spec_input, time_input):
+        time_attn, freq_attn = self.double_attn(spec_input)
+
+        x = torch.mean(time_attn, dim=1) + torch.mean(freq_attn, dim=1)
+
+        skips = []
+        channels = self.init_channels
+
+        # down
+        for i in range(self.depth):
+            x = nn.Conv1d(channels, channels, kernel_size=3, padding=1)(x)
+            x = nn.ReLU()(x)
+            x = nn.Dropout(0.2)(x)
+            x = nn.Conv1d(channels, channels, kernel_size=3, padding=1)(x)
+            skips.append(x)
+            x = nn.MaxPool1d(self.down_fac)(x)
+            channels *= 2
+
+        if self.use_time_backbone:
+            weight_branch, feat_branch = get_timedomain_backbone(time_input, x.shape[-1])
+
+            weight_branch = torch.cat([weight_branch.unsqueeze(-2), x], dim=-2)
+            feat_branch = torch.cat([feat_branch.unsqueeze(-2), x], dim=-2)
+
+            weight_branch = nn.Conv1d(x.shape[-1], x.shape[-1], kernel_size=2)(weight_branch)
+            weight_branch = nn.Dropout(0.2)(weight_branch)
+
+            feat_branch = nn.Conv1d(x.shape[-1], x.shape[-1], kernel_size=2)(feat_branch)
+            feat_branch = nn.Dropout(0.2)(feat_branch)
+
+            x = x + weight_branch * feat_branch
+
+        # up
+        for i in reversed(range(self.depth)):
+            channels = channels // 2
+            x = AttentionUpAndConcat(self.down_fac)(x, skips[i])
+            x = nn.Conv1d(channels, channels, kernel_size=3, padding=1)(x)
+            x = nn.ReLU()(x)
+            x = nn.Dropout(0.2)(x)
+            x = nn.Conv1d(channels, channels, kernel_size=3, padding=1)(x)
+
+        conv6 = nn.Conv1d(1, 1, kernel_size=1, padding=0)(x)
+        x = conv6.view(conv6.size(0), -1)
+        return x
+
+# Assuming you have the get_timedomain_backbone function implemented
+# You can adjust these values according to your requirement
+def test_hybrid_unet(model):
+    # Create a HybridUNet model
+    
+
+    # Generate dummy input data
+    spec_input = torch.randn(1, 100, 80, 2)  # Assuming batch size of 1, 100 frames, 80 frequency bins, and 2 channels
+    time_input = torch.randn(1, 120, 1)      # Assuming batch size of 1, 120 time steps, and 1 channel
+
+    # Forward pass
+    output = model(spec_input, time_input)
+
+    # Check output shape
+    assert output.shape == (1, expected_output_size), f"Output shape mismatch. Expected {(1, expected_output_size)}, got {output.shape}"
+
+    # Check output values (optional)
+    # assert torch.allclose(output, expected_output_tensor, atol=1e-5), "Output values mismatch"
+
+    print("Test passed!")
+#model = HybridUNet(depth=3, attn_channels=32, init_channels=12, down_fac=4, use_time_backbone=True)
+# Call the test function
+#test_hybrid_unet(model)
+# Fill args with the appropriate values
+
+def test_double_attention_layer():
+    # Define input dimensions
+    batch_size = 1
+    n_frames = 100
+    n_bins = 80
+    channels = 32
+
+    # Create a DoubleAttention instance
+    double_attn_layer = DoubleAttention(n_frames, n_bins, channels)
+
+    # Generate dummy input data
+    inp = torch.randn(batch_size, channels, n_frames, n_bins)
+
+    # Forward pass
+    time_attn, freq_attn = double_attn_layer(inp)
+
+    # Check output shapes
+    expected_time_attn_shape = (batch_size, n_frames, n_bins, channels)
+    expected_freq_attn_shape = (batch_size, n_frames, n_bins, channels)
+    assert time_attn.shape == expected_time_attn_shape, f"Time attention shape mismatch. Expected {expected_time_attn_shape}, got {time_attn.shape}"
+    assert freq_attn.shape == expected_freq_attn_shape, f"Frequency attention shape mismatch. Expected {expected_freq_attn_shape}, got {freq_attn.shape}"
+
+    print("Test passed!")
+
+# Call the test function
+#test_double_attention_layer()
+
+
+#%%
+class CorNETFrequency(nn.Module):
+    def __init__(self, n_channels, n_classes, num_extra_features, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size=1000, backbone=False):
+        super(CorNETFrequency, self).__init__()
+        
+        # Instantiate the CorNET model
+        self.cornet = CorNET(n_channels, n_classes, conv_kernels, kernel_size, LSTM_units, input_size, backbone=False)
+        self.num_extra_features = num_extra_features
+        self.input_size = input_size
+        self.backbone = backbone
+        self.n_classes = n_classes
+        # Fully connected network for extra features
+        self.extra_fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.num_extra_features*self.input_size, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+        )
+        
+        # Output layer for the concatenated features
+        self.out_dim = self.cornet.out_dim + 64
+
+        if not self.backbone:
+            self.classifier = Classifier(self.out_dim, n_classes)
+        
+    def forward(self, x):
+        # Split the input into original features and extra features
+        original_features = x[:, :, :-self.num_extra_features]
+        extra_features = x[:, :, :-self.num_extra_features].reshape(x.shape[0], -1)
+        
+        # Pass the original features through the CorNET model
+        _, cornet_output = self.cornet(original_features)
+        
+        # Pass the extra features through the fully connected network
+        extra_output = self.extra_fc(extra_features)
+        
+        # Concatenate the outputs
+        x = torch.cat((cornet_output, extra_output), dim=1)
+        
+        # Pass through the final output layer
+        if self.backbone:
+            return None, x
+        else:
+            out = self.classifier(x)
+            return out, x
+    
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+# %%
+def test_model_frequency():
+    # Define model parameters
+    n_channels = 3
+    n_classes = 1
+    num_extra_features = 3
+    input_size = 1000
+
+
+    # Create dummy input data
+    x = torch.randn(32, input_size, n_channels + num_extra_features)
+
+    # Instantiate the model
+    model = CorNETFrequency(n_channels, n_classes, num_extra_features, backbone=False)
+
+    # Forward pass
+    out, x = model(x)
+
+    # Print output shape
+    print("Output shape:", out.shape)
+
+
+# %%
+
+

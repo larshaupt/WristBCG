@@ -29,7 +29,7 @@ def get_parser():
     parser.add_argument('--weight_decay_pretrain', type=float, default=1e-7, help='weight decay for pretrain')
     parser.add_argument('--scheduler', type=bool, default=False, help='if or not to use a scheduler')
     parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam'], help='optimizer')
-    parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh', 'CrossEntropy'], help='loss function')
+    parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh', 'CrossEntropy', 'NLE'], help='loss function')
     parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
     # dataset
@@ -37,7 +37,7 @@ def get_parser():
     parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
     parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
     parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall"], help='name of dataset for finetuning')
-    parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast"], help='which method to use to output a probability distribution')
+    parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast", "NLE"], help='which method to use to output a probability distribution')
     parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
     parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')
     parser.add_argument('--subsample_ranked_train', type=float, default=0.0, help='amount of data to use for training, 0.0 means default dataset')
@@ -59,7 +59,10 @@ def get_parser():
     parser.add_argument('--data_thr_max', type=float, default=0, help='threshold for input signal max')
     parser.add_argument('--data_thr_angle', type=float, default=0, help='threshold for input signal angle')
     parser.add_argument('--data_thr_hr', type=float, default=0, help='threshold for input signal heart rate quality')
-
+    parser.add_argument('--add_frequency', type=bool, default=False, help='if or not to add frequency to the input signal')
+    parser.add_argument('--bandpass_freq_min', type=float, default=0.1, help='minimum frequency for bandpass filter')
+    parser.add_argument('--bandpass_freq_max', type=float, default=18, help='maximum frequency for bandpass filter')
+    
     # augmentation
     parser.add_argument('--aug1', type=str, default='jit_scal',
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
@@ -74,6 +77,7 @@ def get_parser():
     parser.add_argument('--num_kernels', type=int, default=16, help='number of kernels in CNN')
     parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
     parser.add_argument('--lstm_units', type=int, default=192, help='number of units in LSTM')
+    parser.add_argument('--rnn_type', type=str, default="gru", choices=["lstm", "lstm_bi", "gru", "gru_bi"], help='direction of LSTM')
     parser.add_argument('--criterion', type=str, default='cos_sim', choices=['cos_sim', 'NTXent', 'MSE', 'MAE'],
                         help='type of loss function for contrastive learning')
     parser.add_argument('--p', type=int, default=128,
@@ -136,8 +140,10 @@ if __name__ == '__main__':
     
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
     # setup model, optimizer, scheduler, criterion, logger
+    args = setup_args(args)
+    mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
+    train_loaders, val_loader, test_loader = setup_dataloaders(args, mode=mode)
     model, optimizers, schedulers, criterion, logger = setup(args, DEVICE)
-
 
     # save config file
     config_file = os.path.join(args.lincl_model_file.replace("bestmodel.pt", "config.json"))
@@ -151,7 +157,7 @@ if __name__ == '__main__':
 
     if args.pretrain: # pretraining
         # setup dataloader for pretraining
-        train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=True)
+        #train_loaders, val_loader, test_loader = setup_dataloaders(args, mode="pretraining")
         print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
         pretrain_model_weights = train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
         model.load_state_dict(pretrain_model_weights)
@@ -176,12 +182,12 @@ if __name__ == '__main__':
     ############################################################################################################
 
     trained_backbone = extract_backbone(pretrain_model, args)
-    classifier, criterion_cls, optimizer_cls  = setup_classifier(args, DEVICE, trained_backbone)
+    classifier, criterion_cls, optimizer_cls = setup_classifier(args, DEVICE, trained_backbone)
 
     if args.finetune:
 
         # setup dataloader for finetuning
-        train_loaders, val_loader, test_loader = setup_dataloaders(args, pretrain=False, sample_sequences=False, discrete_hr=args.discretize_hr)
+        train_loaders, val_loader, test_loader = setup_dataloaders(args, mode="finetuning")
         print('device:', DEVICE, 'dataset:', args.dataset)
         
 
@@ -207,15 +213,15 @@ if __name__ == '__main__':
     ############################################################################################################
 
     if args.postprocessing != 'none':
-
-        train_loader, val_loader, test_loader = setup_dataloaders(args, pretrain=False, sample_sequences=True, discrete_hr=True, sigma=3)
+        criterion_post = nn.BCELoss(reduction='mean')
+        train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
         trained_backbone = add_probability_wrapper(trained_backbone, args, DEVICE)
         postprocessing_model = setup_postprocessing_model(args)
-
+        
         postprocessing_model = train_postprocessing(train_loader, postprocessing_model, DEVICE, args)
 
-        test_postprocessing(val_loader, trained_backbone, postprocessing_model,  logger, DEVICE, criterion_cls, args, plt=args.plt, prefix='Val')
-        test_postprocessing(test_loader, trained_backbone, postprocessing_model, logger, DEVICE, criterion_cls, args, plt=args.plt, prefix='Test')
+        test_postprocessing(val_loader, trained_backbone, postprocessing_model,  logger, DEVICE, criterion_post, args, plt=args.plt, prefix='Val')
+        test_postprocessing(test_loader, trained_backbone, postprocessing_model, logger, DEVICE, criterion_post, args, plt=args.plt, prefix='Test')
         
 
 

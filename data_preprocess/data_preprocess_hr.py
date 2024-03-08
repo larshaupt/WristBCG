@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 import config
 import re
 import json
-from scipy.signal import resample
+from scipy.signal import resample, periodogram, butter, sosfiltfilt
 from scipy.interpolate import interp1d
 from scipy.stats import rankdata
 import julius
@@ -168,7 +168,11 @@ def load_random_indices(data_path):
         random_indices = cp.load(f)
     return random_indices
     
-def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=False, take_every_nth_train=1, take_every_nth_test=1):
+def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=False, take_every_nth_train=1, take_every_nth_test=1, sampling_rate = None):
+
+    if sampling_rate == None or sampling_rate == 0:
+            sampling_rate = 100 # since we are nromalizing the spectrogram later anyway, we can use any sampling rate
+
 
     if args is not None: # taking the parameters from the args
         subsample_ranked_train = args.subsample_ranked_train
@@ -177,6 +181,8 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
         data_thr_max = args.data_thr_max
         data_thr_angle = args.data_thr_angle
         data_thr_hr = args.data_thr_hr
+        bandpass_freq_min = args.bandpass_freq_min
+        bandpass_freq_max = args.bandpass_freq_max
 
     else: # if the args are not given, then the parameters are set to None, i.e. the data is not subsampled
         subsample_ranked_train = None
@@ -185,6 +191,8 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
         data_thr_max = None
         data_thr_angle = None
         data_thr_hr = None
+        bandpass_freq_min = None
+        bandpass_freq_max = None
 
 
     def load_pickle(path):
@@ -245,7 +253,11 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
 
         return y
     
-    def filter_by_metric(metrics, thr_avg, thr_max, thr_angle, thr_hr):
+    def filter_by_metric(metrics, data:list, thr_avg, thr_max, thr_angle, thr_hr, print_discarded=True):
+
+        if len(metrics) == 0:
+            print("No metrics found, returning all data")
+            return data
         mask = np.ones_like(metrics[:,0], dtype=bool)
         if thr_avg != None and thr_avg != 0:
             mask = mask* (metrics[:,0] < thr_avg)
@@ -254,8 +266,13 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
         if thr_angle != None and thr_angle != 0:
             mask = mask* (metrics[:,2] < thr_angle)
         if thr_hr != None and thr_hr != 0:
-            mask = mask* (metrics[:,3] < thr_hr)
-        return mask
+            mask = mask* (metrics[:,3] > thr_hr)
+
+        if print_discarded:
+            print(f"Discarded {100 - mask.sum()/len(mask)*100:.2f}% of data by thresholding")
+
+        data = [d[mask] for d in data]
+        return data
     
 
     split_path = os.path.join(data_path, "splits.json")
@@ -314,26 +331,33 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
         y_test = y_test[best_ind_test[:num_values]]
         d_test = d_test[best_ind_test[:num_values]]
 
+    
+    (x_train, y_train, d_train) = filter_by_metric(metrics_train, [x_train, y_train, d_train], data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr, print_discarded=True)
+    (x_val, y_val, d_val) = filter_by_metric(metrics_val, [x_val, y_val, d_val], data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr, print_discarded=True)
+    (x_test, y_test, d_test) = filter_by_metric(metrics_test, [x_test, y_test, d_test], data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr, print_discarded=True)
 
-    mask_train = filter_by_metric(metrics_train, data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr)
-    mask_val = filter_by_metric(metrics_val, data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr)
-    mask_test = filter_by_metric(metrics_test, data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr)
 
-    print(f"Discarded {mask_train.sum()/len(mask_train)*100:.2f}% of training data")
-    print(f"Discarded {mask_val.sum()/len(mask_val)*100:.2f}% of validation data")
-    print(f"Discarded {mask_test.sum()/len(mask_test)*100:.2f}% of test data")
+    if bandpass_freq_min not in [None, 0.1,0] or bandpass_freq_max not in [None, 18, 0]:
 
-    x_train = x_train[mask_train]
-    y_train = y_train[mask_train]
-    d_train = d_train[mask_train]
+        if bandpass_freq_min in [None, 0.1,0]:
+            sos = butter(4, bandpass_freq_max, btype='high', fs=sampling_rate, output='sos')
+        elif bandpass_freq_max in [None, 18, 0]:
+            sos = butter(4, bandpass_freq_min, btype='low', fs=sampling_rate, output='sos')
+        else:
+            sos = butter(4, [bandpass_freq_min, bandpass_freq_max], btype='band', fs=sampling_rate, output='sos')
+        x_train = np.apply_along_axis(lambda x: sosfiltfilt(sos, x), 1, x_train)
+        x_val = np.apply_along_axis(lambda x: sosfiltfilt(sos, x), 1, x_val)
+        x_test = np.apply_along_axis(lambda x: sosfiltfilt(sos, x), 1, x_test)
 
-    x_val = x_val[mask_val]
-    y_val = y_val[mask_val]
-    d_val = d_val[mask_val]
 
-    x_test = x_test[mask_test]
-    y_test = y_test[mask_test]
-    d_test = d_test[mask_test]
+    if args.add_frequency:
+
+        freq_func = lambda x: periodogram(x, fs=sampling_rate, axis=0, scaling='density', nfft=(x.shape[0] - 1)*2)[1]
+        x_train = np.concatenate([x_train, np.apply_along_axis(freq_func, 0, x_train)], axis=-1)
+        x_val = np.concatenate([x_val, np.apply_along_axis(freq_func, 0, x_val)], axis=-1)
+        x_test = np.concatenate([x_test, np.apply_along_axis(freq_func, 0, x_test)], axis=-1)
+
+
 
     d_train = d_train.astype(float)
     d_val = d_val.astype(float)
@@ -411,7 +435,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         sampling_rate = 100
         if args.step_size == 8 and args.window_size == 10:
             data_path = config.data_dir_Max_processed
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
         
@@ -419,7 +443,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         sampling_rate = 50
         if args.step_size == 8 and args.window_size == 10:
             data_path = config.data_dir_Apple_processed
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
     
@@ -427,7 +451,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         sampling_rate = 32
         if args.step_size == 8 and args.window_size == 10:
             data_path = config.data_dir_M2Sleep_processed
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
     
@@ -477,13 +501,13 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
             else:
                 raise ValueError(f"Invalid step size {args.step_size} for dataset {dataset}")
             
-        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, take_every_nth_train=args.take_every_nth_train, take_every_nth_test=args.take_every_nth_test)
+        x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, take_every_nth_train=args.take_every_nth_train, take_every_nth_test=args.take_every_nth_test, sampling_rate=sampling_rate)
     
     elif dataset == 'appleall':
         sampling_rate = 100
         if args.step_size == 8 and args.window_size == 10:
             data_path = config.data_dir_Apple_processed_all
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
     
@@ -491,7 +515,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         sampling_rate = 100
         if args.step_size == 8 and args.window_size == 10:
             data_path = config.data_dir_M2Sleep_processed_100Hz
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
     
@@ -504,7 +528,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
                 data_path = config.data_dir_Parkinson_processed_100Hz
             else:
                 data_path = config.data_dir_Parkinson_processed_100Hz_wmetrics
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
 
@@ -512,7 +536,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         sampling_rate = 125
         if args.window_size == 8:
             data_path = config.data_dir_IEEE_processed
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
     
@@ -525,6 +549,10 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         x_train, y_train, d_train = resample_data(x_train, y_train, d_train, sampling_rate, args.sampling_rate)
         x_val, y_val, d_val = resample_data(x_val, y_val, d_val, sampling_rate, args.sampling_rate)
         x_test, y_test, d_test = resample_data(x_test, y_test, d_test, sampling_rate, args.sampling_rate)
+    else:
+        args.sampling_rate = sampling_rate
+
+    args.input_length = args.window_size * args.sampling_rate
         
     if args.normalize:
         x_train = normalize_samples(x_train)

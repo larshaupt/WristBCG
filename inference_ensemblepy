@@ -19,144 +19,162 @@ from main import get_parser
 
 from captum.attr import IntegratedGradients
 
-split_res = {}
 
 #%%
-split = 1
-
-#json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_stepsize_4/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
-#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
-json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split{split}_eps60_bs512_config.json"
-#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120_CorNET_dataset_max_split{split}_eps60_bs512_config.json"
-# json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120_CorNET_dataset_max_split4_eps60_bs512_config.json"
-#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
-with open(json_file) as json_file:
-    json_args = json.load(json_file)
+preds_dict = {}
+DEVICE = None
+test_loader = None
+for random_seed in [0,1,2,3,4,5,6,7,10]:
 
 
+    for split in [0,1,2,3,4]:
 
-parser = get_parser()
-args = parser.parse_args([])
-args_dict = vars(args)
-args_dict.update(json_args)
-args = Namespace(**args_dict)
+
+        rseed = f"_rseed_{random_seed}" if random_seed != 10 else ""
+
+        json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120{rseed}_CorNET_dataset_apple100_split{split}_eps60_bs512_config.json"
+
+        with open(json_file) as json_file:
+            json_args = json.load(json_file)
 
 
 
-mode = "finetune"
+        parser = get_parser()
+        args = parser.parse_args([])
+        args_dict = vars(args)
+        args_dict.update(json_args)
+        args = Namespace(**args_dict)
 
 
-if not hasattr(args, "model_name"):
-    split = 0
-    args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_split' + str(split)
 
-if mode == "finetune":
-    model_weights_path = args.lincl_model_file
-elif mode == "pretrain":
-    model_weights_path = args.pretrain_model_file
-else:
-    raise ValueError(f"Mode {mode} not supported")
+        mode = "finetune"
 
-#args.batch_size = 1
-#args.cuda = 3
-#args.dataset = "IEEE"
-#args.step_size = 8
-args.cuda = 1
-#args.window_size = 10
-#args.sampling_rate = 100
-#args.subsample_ranked_train = 1.0
-#args.dataset = "apple100"
-#args.hr_min = 30
-#args.data_thr_hr = 0
-#args.data_thr_max = 100
-#args.data_thr_angle = 100
-#args.data_thr_avg = 100
-# %%
-# Testing
-#######################
-DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
-print('device:', DEVICE, 'dataset:', args.dataset)
+
+        if not hasattr(args, "model_name"):
+            split = 0
+            args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_split' + str(split)
+
+        if mode == "finetune":
+            model_weights_path = args.lincl_model_file
+        elif mode == "pretrain":
+            model_weights_path = args.pretrain_model_file
+        else:
+            raise ValueError(f"Mode {mode} not supported")
+
+        args.cuda = 1
+
+
+        
+        if DEVICE is None:
+            DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
+            print('device:', DEVICE, 'dataset:', args.dataset)
+        if test_loader is None:       
+            train_loader, val_loader, test_loader = setup_dataloaders(args)
+
+
+        if args.backbone == 'FCN':
+            model_test = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=True)
+        elif args.backbone == 'DCL':
+            model_test = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, backbone=True)
+        elif args.backbone == 'LSTM':
+            model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=True)
+        elif args.backbone == 'AE':
+            model_test = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=True)
+        elif args.backbone == 'CNN_AE':
+            model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, embdedded_size=128, input_size=args.input_length, backbone=True, n_channels_out=args.n_channels_out)
+        elif args.backbone == 'Transformer':
+            model_test = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True)
+        elif args.backbone == "CorNET":
+            model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length)
+        elif args.backbone == "TCN":
+            model_test = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=True)
+        else:
+            NotImplementedError
+
+        # Testing
+        model_weights_dict = torch.load(model_weights_path, map_location = DEVICE)
+
+        if mode == "finetune":
+            classifier = setup_linclf(args, DEVICE, model_test.out_dim)
+            model_test.set_classification_head(classifier)
+            model_weights = load_best_lincls(args, device=DEVICE)
+
+
+        elif mode == "pretrain":
+            model_weights = model_weights_dict["model_state_dict"]
+
+        model_test.load_state_dict(model_weights, strict=False)
+        model_test = model_test.to(DEVICE)
+
+
+
+
+        X, Y, D, P = [], [], [], []
+        model_test.eval()
+        for i, (x, y, d) in enumerate(test_loader):
+
+            x = x.to(DEVICE).float()
+            y = y.to(DEVICE)
+            d = d.to(DEVICE)
+            p,_ = model_test(x)
+            x = x.detach().cpu().numpy()
+            y = y.detach().cpu().numpy()
+            d = d.detach().cpu().numpy()
+            p = p.detach().cpu().numpy()
+            X.append(x)
+            Y.append(y)
+            D.append(d)
+            P.append(p)
+            
+        X = np.concatenate(X)
+        Y = np.concatenate(Y)
+        D = np.concatenate(D)
+        P = np.concatenate(P).squeeze()
+
+        P = P*(args.hr_max - args.hr_min) + args.hr_min
+        Y = Y*(args.hr_max - args.hr_min) + args.hr_min
+
+        preds_dict[(random_seed, split)] = P
+
 #%%
-# Load data
-train_loader, val_loader, test_loader = setup_dataloaders(args)
+#df_preds = pd.Series(preds_dict)
+
+splits_all = [ [0], [1], [2], [3], [4], [0,1,2,3,4]]
+random_seeds = [[0],[1],[2],[3],[4],[5],[6],[7],[10], [0,1,2,3,4,5,6,7,10]]
+
+res = {}
+
+for splits in splits_all:
+
+    preds = np.array([preds_dict[(rseed,split)] for split in splits for rseed in random_seeds[-2]])
+    #preds = np.array([preds_dict[(rseed,split)] for split in splits])
+    #preds = np.array([preds_dict[(rseed,split)] for rseed in random_seeds])
+    P = np.mean(preds, axis=0)
+    uncert = np.std(preds, axis=0)
+
+
+    corr = np.corrcoef(Y, P)[0,1]
+    mae = np.mean(np.abs(Y-P))
+    rmse = np.sqrt(np.mean((Y-P)**2))
+    print(f"Correlation: {corr}")
+    print(f"MAE: {mae}")
+    print(f"RMSE: {rmse}")
+
+    uncert_corr = np.corrcoef(np.abs(Y-P), uncert)[0,1]
+
+    if  len(splits) == 1:
+
+        res[splits[0]] = {"corr": corr, "mae": mae, "rmse": rmse, "uncert_corr": uncert_corr}
+    else:
+        res["all"] = {"corr": corr, "mae": mae, "rmse": rmse, "uncert_corr": uncert_corr}
 
 #%%
-# Initialize and load test model
-if args.backbone == 'FCN':
-    model_test = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=True)
-elif args.backbone == 'DCL':
-    model_test = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, backbone=True)
-elif args.backbone == 'LSTM':
-    model_test = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=True)
-elif args.backbone == 'AE':
-    model_test = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, outdim=128, backbone=True)
-elif args.backbone == 'CNN_AE':
-    model_test = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, embdedded_size=128, input_size=args.input_length, backbone=True, n_channels_out=args.n_channels_out)
-elif args.backbone == 'Transformer':
-    model_test = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True)
-elif args.backbone == "CorNET":
-    model_test = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length)
-elif args.backbone == "TCN":
-    model_test = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=True)
-else:
-    NotImplementedError
-
-# Testing
-model_weights_dict = torch.load(model_weights_path, map_location = DEVICE)
-
-if mode == "finetune":
-    classifier = setup_linclf(args, DEVICE, model_test.out_dim)
-    model_test.set_classification_head(classifier)
-    model_weights = load_best_lincls(args, device=DEVICE)
-
-
-elif mode == "pretrain":
-    model_weights = model_weights_dict["model_state_dict"]
-
-model_test.load_state_dict(model_weights, strict=False)
-model_test = model_test.to(DEVICE)
-
-
-#%%
-
-X, Y, D, P = [], [], [], []
-model_test.eval()
-for i, (x, y, d) in enumerate(test_loader):
-
-    x = x.to(DEVICE).float()
-    y = y.to(DEVICE)
-    d = d.to(DEVICE)
-    p,_ = model_test(x)
-    x = x.detach().cpu().numpy()
-    y = y.detach().cpu().numpy()
-    d = d.detach().cpu().numpy()
-    p = p.detach().cpu().numpy()
-    X.append(x)
-    Y.append(y)
-    D.append(d)
-    P.append(p)
     
-X = np.concatenate(X)
-Y = np.concatenate(Y)
-D = np.concatenate(D)
-P = np.concatenate(P).squeeze()
-
-P = P*(args.hr_max - args.hr_min) + args.hr_min
-Y = Y*(args.hr_max - args.hr_min) + args.hr_min
-
-split_res[split] = P
-
-#%%
-P = split_res[split]
-#P = np.mean(np.array([split_res[split] for split in split_res.keys()]), axis=0)
-#%%
-
-corr = np.corrcoef(Y, P)[0,1]
-mae = np.mean(np.abs(Y-P))
-rmse = np.sqrt(np.mean((Y-P)**2))
-print(f"Correlation: {corr}")
-print(f"MAE: {mae}")
-print(f"RMSE: {rmse}")
+df_res = pandas.DataFrame(res).T
+df_res["corr"].plot(kind="bar")
+plt.ylabel("Correlation")
+plt.xlabel("Split ID")
+plt.title("Correlation per Split")
 
 #%%
 df_bioglass = pd.read_pickle(os.path.join(config.classical_results_dir, "predictions_Bioglass_test_Apple100_split0.pkl"))
@@ -544,4 +562,35 @@ df_res.groupby("axis").agg({"deviation": ["median", "std"], "error": ["mean", "s
 
 #sns.boxplot(data=df_res, x="axis", y="error")
 
+# %%
+
+
+def plot_excluion(HR_true, HR_pred, uncertainty, ax=None, metric="MAE", name=""):
+
+    if ax is None:
+        fig, ax = plt.subplots(1,1, figsize=(10,5))
+
+    df_res = pandas.DataFrame({"hr_true": HR_true, 
+                            "hr_pred": HR_pred, 
+                            "uncertainty": uncertainty})
+
+    df_res.sort_values("uncertainty", inplace = True, ascending=True)
+
+    p_keep = np.linspace(0,100,100)
+    total_num = len(df_res)
+    if metric=="MAE":
+        df_res["mae"] = np.abs(df_res["hr_true"] - df_res["hr_pred"])
+        mae = [df_res["mae"].iloc[:int(p/100*total_num)].mean() for p in p_keep]
+        ax.plot(p_keep, mae, label=name)
+        ax.set_ylabel("MAE")
+    
+    elif metric=="Corr":
+        corr = [df_res[["hr_true", "hr_pred"]].iloc[:int(p/100*total_num)].corr().iloc[0,1] for p in p_keep]
+        ax.plot(p_keep, corr, label=name)
+        ax.set_ylabel("Correlation")
+
+
+    ax.set_xlabel("Percentage of data evaluated")
+    ax.set_title("Exclusion of uncertain predictions")
+    ax.legend()
 # %%

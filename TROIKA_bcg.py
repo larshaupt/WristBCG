@@ -197,7 +197,7 @@ class PeakFinder:
         return self.transform(spectrum)
 
 class SpectralPeakTracker:
-    def __init__(self, n_freq_bins=4096, ppg_sampling_freq=125, delta_s_rel=16/4069, eta=.3, tau=0.00048828125, theta=0.00146484375):
+    def __init__(self, n_freq_bins=4096, ppg_sampling_freq=125, delta_s_rel=16/4069, eta=.3, tau=0.00048828125, theta=0.00146484375, init_freq_bounds=None):
         self.n_freq_bins = n_freq_bins
         self.ppg_sampling_freq = ppg_sampling_freq
         
@@ -211,6 +211,12 @@ class SpectralPeakTracker:
 
         self.history = [] # frequency indices
 
+        if init_freq_bounds is not None:
+            self.init_freq_bounds = init_freq_bounds
+        else:
+            self.init_freq_bounds = [50, 90]
+        self.init_freq_bounds = (np.array(self.init_freq_bounds) / (60 * ppg_sampling_freq) * self.n_freq_bins).round().astype(int)
+
     def _get_N0_N1(self, spectrum):
 
         N_prev = self.history[-1]
@@ -220,14 +226,16 @@ class SpectralPeakTracker:
         R_1_end_idx = 2 * (N_prev + self.delta_s - 1) + 1
         R_0_idx = np.arange(R_0_base_idx, R_0_end_idx + 1)
         R_1_idx = np.arange(R_1_base_idx, R_1_end_idx + 1)
-        R_0 = R_0[0 <= R_0_idx < len(spectrum)]
-        R_1 = R_1[0 <= R_1_idx < len(spectrum)]
 
-        N_0 = np.argpartition(spectrum[R_0], -3)[-3:] + R_0_base_idx
-        threshold = self.eta * np.max(spectrum[N_0])
-        N_1 = np.argpartition(spectrum[R_1], -3)[-3:] + R_1_base_idx
-        N_0 = N_0[spectrum[N_0] >= threshold] # N_0 cannot be empty since tau_peak is calculated based on R_0
-        N_1 = N_1[spectrum[N_1] >= threshold] # N_1 can be empty
+        threshold = self.eta * np.max(spectrum[R_0_idx])
+        peaks = scipy.signal.find_peaks(spectrum, height=threshold)[0]
+        
+        
+        N_0 = peaks[(peaks >= R_0_base_idx) & (peaks <= R_0_end_idx)]
+        N_1 = peaks[(peaks >= R_1_base_idx) & (peaks <= R_1_end_idx)]
+
+        if len(N_0) == 0:
+            N_0 = np.array([np.argmax(spectrum[R_0_idx]) + R_0_base_idx])
 
         return N_0, N_1
 
@@ -262,7 +270,14 @@ class SpectralPeakTracker:
         return N_cur
 
     def transform_first(self, spectrum: np.ndarray):
-        N_cur = np.argmax(spectrum)
+        peaks = scipy.signal.find_peaks(spectrum)[0]
+        peaks_sorted = peaks[np.argsort(spectrum[peaks])[::-1]]
+        peaks_sorted = peaks_sorted[self.init_freq_bounds[0]:self.init_freq_bounds[1]]
+
+        if len(peaks_sorted) == 0:
+            N_cur = self.init_freq_bounds[0] + np.argmax(spectrum[self.init_freq_bounds[0]:self.init_freq_bounds[1]])
+        else:
+            N_cur = np.argmax(peaks_sorted)
         self.history.append(N_cur)
         
         return N_cur
@@ -270,7 +285,7 @@ class SpectralPeakTracker:
     def transform(self, spectrum: np.ndarray):
         N_0, N_1 = self._get_N0_N1(spectrum)
         N_hat = self._get_N_hat(N_0, N_1)
-        N_cur = self._verification_stage_1(N_hat)
+        N_cur = self._verification_stage_1(N_hat).astype(int)
         self.history.append(N_cur)
 
         return N_cur
@@ -377,7 +392,8 @@ class Troika:
         current_window = 1
         progress_bar = tqdm(total=n_windows, initial=current_window)
 
-        spt = PeakFinder()
+        spt = SpectralPeakTracker(ppg_sampling_freq=self.sampling_freq, n_freq_bins=self.n_freq_bins, init_freq_bounds=[50, 90])
+        #spt = PeakFinder()
 
         while current_window <= n_windows:
             
@@ -422,121 +438,6 @@ class Troika:
 
 
 
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-
-def plot_ppg(signals, markers=None, x_interval=None, retfig=False):
-    """
-    Parameters
-    ----------
-        signals : DataFrame
-            the signals to plot. Each column will be plotted as an individual signal.
-            The index should be a range index (sample id)
-
-        markers : DataFrame of dtype bool, optional
-            Needs to have the same index and columns as signals.
-            Where a value is True, a marker wil appear in the plot.
-            This parameter can be used to mark spectral peaks.
-        
-        x_interval : list-like, optional
-            Two integers used to preset an x axis zoom in the figure
-
-        retfig : bool, optional
-            if the resulting plotting figure should be returned
-
-    Returns
-    ----------
-        figure : plotly.graph_objects.Figure
-            Returned only if retfig is True
-    """
-
-    if isinstance(signals, np.ndarray):
-        signals = pd.DataFrame(signals.T)
-    
-    color_map = dict(zip(signals.columns, px.colors.qualitative.Alphabet))
-    fig = go.Figure()
-
-    for name in signals.columns:
-        fig.add_trace(go.Scatter(x=signals.index, y=signals[name], name=name, mode='lines',
-                                 line = dict(color=color_map[name])))
-
-    if markers:
-        for name, idx_arr in markers.items():
-            fig.add_trace(go.Scatter(x=idx_arr, y=signals.loc[idx_arr, name], mode='markers', 
-                                     line = dict(color=color_map[name])))
-            fig['data'][-1]['showlegend'] = False
-
-    if x_interval is not None:
-        fig.update_xaxes(range=x_interval)
-
-    fig.update_layout(
-        xaxis_title="sample id",
-        yaxis_title="Amplitude"
-    )
-
-    if retfig:
-        return fig
-    
-    fig.show()
-
-def plot_spectrum(signals, markers=None, x_interval=None, retfig=False):
-    """
-    Parameters
-    ----------
-        signals : DataFrame or ndarray of shape (n_signals, n_freq_points)
-            the spectra to plot. Each column will be plotted as an individual spectrum.
-            The index values are interpreted as frequencies.
-
-        markers : DataFrame of dtype bool, optional
-            Needs to have the same index and columns as signals.
-            Where a value is True, a marker wil appear in the plot.
-            This parameter can be used to mark spectral peaks.
-        
-        x_interval : list-like, optional
-            Two integers used to preset an x axis zoom in the figure
-
-        retfig : bool, optional
-            if the resulting plotting figure should be returned
-
-    Returns
-    ----------
-        figure : plotly.graph_objects.Figure
-            Returned only if retfig is True
-    """
-    if isinstance(signals, np.ndarray):
-        signals = pd.DataFrame(signals.T)
-
-    color_map = dict(zip(signals.columns, px.colors.qualitative.Alphabet))
-    fig = go.Figure()
-
-    for name in signals.columns:
-        fig.add_trace(go.Scatter(x=signals.index, y=signals[name], name=name, mode='lines',
-                                 line = dict(color=color_map[name])))
-
-    if markers:
-        for name, idx_arr in markers.items():
-            fig.add_trace(go.Scatter(x=idx_arr, y=signals.loc[idx_arr, name], mode='markers', 
-                                     line = dict(color=color_map[name])))
-            fig['data'][-1]['showlegend'] = False
-
-    if x_interval is not None:
-        fig.update_xaxes(range=x_interval)
-
-    fig.update_layout(
-        xaxis_title="frequency",
-        yaxis_title="amount"
-    )
-
-    if retfig:
-        return fig
-    
-    fig.show()
-
-
-
-
 #%% test troika
     
 
@@ -556,7 +457,7 @@ pid = pid_test[i]
 
 
 #%%
-
+""" 
 acc_x = data_utils.butterworth_bandpass(acc[:,0], low=0.5, high=4, fs=100)
 acc_y = data_utils.butterworth_bandpass(acc[:,1], low=0.5, high=4, fs=100)
 acc_z = data_utils.butterworth_bandpass(acc[:,2], low=0.5, high=4, fs=100)
@@ -686,106 +587,6 @@ closest_hr_peak = highest_hr_peaks[np.argmin(np.abs(highest_hr_peaks - hr_true))
 print(highest_hr_peak,closest_hr_peak, hr_true)
 
 
-
-#%%
-
-def SSR(y, Fs, N=None, inverse_method='FOCUSS', p = 0.8, n_iter = 5):
-
-    if inverse_method.lower() == 'focuss':
-        inv_func = FOCUSS
-    else:
-        inv_func = matrix_inverse
-
-    if N is None:
-        # resolution is set to 1 BPM
-        N = 60 * Fs
-    M = len(y)
-    # construct Fourier matrix
-
-    ns = np.arange(0, N)
-
-    m, n = np.meshgrid(np.arange(M), ns, indexing='ij')
-    Phi = np.exp(1j * 2 * np.pi / N * m * n)
-    # calculate BPM-axis
-    BPM = 60 * Fs / N * (ns)
-    # construct sparse spectrum
-    s = inv_func(Phi, y, p=p, n_iter=n_iter)
-    # Band-pass frequencies in BPM
-    BPM_bp = np.array([40, 200])
-    # Band-pass spectrum
-    s = BP(s, Fs, BPM_bp)
-    return BPM, s
-
-def FOCUSS(Phi, y, p=1, n_iter=5):
-    x = np.linalg.pinv(Phi) @ y
-    res = []
-    for i in range(n_iter):
-        x = focuss.step_noiseless(Phi, y, x, p=p)
-
-        x_hat = np.abs(x)
-        periodogram = x_hat
-        #frequencies = ns / N * f_s
-        #plt.plot(frequencies *60,periodogram, label=i)
-        sparsity = np.linalg.norm(x, ord=p)
-        estimation_quality = np.linalg.norm(Phi @ x - y, ord=p)
-        res.append((sparsity, estimation_quality))
-
-        print(f"Sparsity: {sparsity}, estimation quality: {estimation_quality}")
-    #plt.legend()
-    return x_hat
-
-def matrix_inverse(Phi, y, p = 1, n_iter = 5):
-    # initialization of x
-    x = np.ones((Phi.shape[1], 1))
-    for _ in range(n_iter):
-        W_pk = np.diag(x.flatten())
-        q_k = MPinverse(np.dot(Phi, W_pk)).dot(y)
-        x = np.dot(W_pk, q_k)
-        sparsity = np.linalg.norm(x, ord=p)
-        estimation_quality = np.linalg.norm(Phi @ x - y, ord=p)
-        print(f"Sparsity: {sparsity}, estimation quality: {estimation_quality}")
-    s = np.abs(x.flatten())**2
-    return s
-
-def MPinverse(A):
-    matrix = np.conj(A.T)
-    A_plus = np.dot(matrix, np.linalg.inv(np.dot(A, matrix)))
-    return A_plus
-
-def BP(SSRsig, Fs, BPM_bp):
-    N = len(SSRsig)
-    f_lo = BPM_bp[0] / 60
-    f_hi = BPM_bp[1] / 60
-    R = np.arange(int(np.floor(f_lo / Fs * N)), int(np.ceil(f_hi / Fs * N)) + 1)
-    H = np.zeros(N)
-    H[R] = 1
-    SSRsig = SSRsig * H
-    return SSRsig
-BPM, s = SSR(np.diff(acc_reconstructed, 1), 100, 4096*2, n_iter=5, p=0.8, inverse_method="focuss")
-
-# %%
-plt.title(f"HR: {hr_true}")
-
-plt.plot(BPM, s, label="FOCUSS")
-plt.xlim(0,120)
-
-
-peaks = find_peaks(s)[0]
-peaks = peaks[s[peaks] > np.max(s) * 0.1]
-peaks = peaks[BPM[peaks] > 40]
-plt.plot(BPM[peaks], s[peaks], "x")
-plt.legend()
-print(f"Found peaks at {BPM[peaks]}")
-
-twinax = plt.twinx()
-
-frequencies, periodogram = scipy.signal.periodogram(acc_reconstructed, nfft=4096 * 2 - 1, fs=100)
-twinax.plot(frequencies*60, periodogram, color='green', label="periodogram")
-twinax.legend(loc='upper left')
-
-# %%
-# %%
-
 ts = acc_x
 N = 1000
 L = 600
@@ -830,14 +631,28 @@ for i in range(d):
     ts_i = torch.tensor([torch.diagonal(X_elem_rev, offset).mean() for offset in range(-L + 1, K)])
     deconstructed_ts[i] = ts_i
 
-deconstructed_ts = deconstructed_ts.permute(1, 0, 2)  # (L, d, K)
+deconstructed_ts = deconstructed_ts.permute(1, 0, 2)  # (L, d, K) """
 # %%
 
 
 troika = Troika(window_duration=10, step_duration=8, acc_sampling_freq=100, cutoff_freqs=[0.4, 5])
 
 # %%
-for hr_true, hr in zip(Y_val, troika.transform(X_val)):
+Y_pred, Y_true, Pids, Metrics = [], [], [], []
+
+for hr_true, hr, pid, metric in zip(Y_test, troika.transform(X_test[100:]), pid_test, metrics_test):
     print(hr_true, hr)
+
+    Y_pred.append(hr)
+    Y_true.append(hr_true)
+    Pids.append(pid)
+    Metrics.append(metric)
+
+    with open("troika_results.csv", "a") as f:
+        f.write(f"{hr_true},{hr},{pid},{metric}\n")
+
+df_results = pd.DataFrame({"y_true": Y_true, "hr_pred": Y_pred, "pid": Pids, "metric": Metrics})
+df_results.to_pickle("troika_results.pkl")
+
 
 # %%

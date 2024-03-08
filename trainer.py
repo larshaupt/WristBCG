@@ -53,9 +53,10 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     return figure
     
 
-def setup_dataloaders(args, pretrain=False, sample_sequences=False, discrete_hr=False, sigma=None):
+def setup_dataloaders(args, mode="finetuning"):
 
-    if pretrain:
+
+    if mode == "pretraining":
         dataset = args.pretrain_dataset
         split = 0 # pretrains network always with split 0
         subsample_rate = args.pretrain_subsample
@@ -64,12 +65,29 @@ def setup_dataloaders(args, pretrain=False, sample_sequences=False, discrete_hr=
             reconstruction = True
         else:
             reconstruction = False
+        sample_sequences = False
+        discrete_hr = False
+        sigma = args.label_sigma
 
-    else: # normal dataset, not pretraining
+    elif mode =="finetuning": # normal dataset, not pretraining
         dataset = args.dataset
         split = args.split
         subsample_rate = args.subsample
         reconstruction = False
+        sample_sequences = False
+        sigma = args.label_sigma
+        discrete_hr = args.discretize_hr
+
+    elif mode == "postprocessing":
+        dataset = args.dataset
+        split = args.split
+        subsample_rate = args.subsample
+        reconstruction = False
+        sample_sequences = True
+        sigma = args.label_sigma
+        discrete_hr = True
+    else:
+        raise ValueError(f"Mode {mode} not recognized")
 
 
     train_loader, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split, subsample_rate=subsample_rate, reconstruction=reconstruction, sample_sequences=sample_sequences, discrete_hr=discrete_hr, sigma=sigma)
@@ -87,9 +105,11 @@ def setup_linclf(args, DEVICE, bb_dim):
     if args.backbone in ['CNN_AE'] and args.framework == 'reconstruction':
         classifier = LSTM_Classifier(bb_dim=bb_dim, n_classes=args.n_class)
     else:
-        classifier = Classifier(bb_dim=bb_dim, n_classes=args.n_class)
-    #classifier.classifier.weight.data.normal_(mean=0.0, std=0.01)
-    #classifier.classifier.bias.data.zero_()
+        if args.model_uncertainty == "NLE":
+            classifier = Classifier_with_uncertainty(bb_dim=bb_dim, n_classes=args.n_class)
+        else:
+            classifier = Classifier(bb_dim=bb_dim, n_classes=args.n_class)
+
     classifier = classifier.to(DEVICE)
     return classifier
 
@@ -132,7 +152,10 @@ def setup_model_optm(args, DEVICE):
         elif args.backbone == 'Transformer':
             backbone = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True)
         elif args.backbone == "CorNET":
-            backbone = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length)
+            if args.add_frequency:
+                backbone = CorNETFrequency(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length, num_extra_features=args.n_feature)
+            else:
+                backbone = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length, rnn_type=args.rnn_type)
         elif args.backbone == "TCN":
             backbone = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=True)
         else:
@@ -191,7 +214,9 @@ def delete_files(args):
             os.remove(cls_dir)
 
 
-def setup(args, DEVICE):
+
+
+def setup_args(args):
 
         
     if args.lr_finetune_lstm == -1:
@@ -200,19 +225,22 @@ def setup(args, DEVICE):
     if args.model_uncertainty == "gaussian_classification":
         args.discretize_hr = True
         args.n_class = args.n_prob_class
+    elif args.model_uncertainty == "NLE":
+        args.loss = "NLE"
+        args.discretize_hr = False
     else:
         args.discretize_hr = False
 
+    
+
     if args.n_class == 1:
-        assert args.loss in ['MSE', 'MAE', 'Huber', 'LogCosh']
+        assert args.loss in ['MSE', 'MAE', 'Huber', 'LogCosh', "NLE"]
     else:
         assert args.loss == 'CrossEntropy'
 
     if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall"]:
         args.n_feature = 3
-
-
-    args.input_length = args.window_size*args.sampling_rate
+    
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -249,6 +277,8 @@ def setup(args, DEVICE):
     model_name_opt += f"_stepsize_{args.step_size}" if args.step_size != 8 else ""
     model_name_opt += f"_szfactor_test_{args.take_every_nth_test}" if args.take_every_nth_test != 1 else ""
     model_name_opt += f"_szfactor_train_{args.take_every_nth_train}" if args.take_every_nth_train != 1 else ""
+    model_name_opt += f"_wfrequency" if args.add_frequency else ""
+    model_name_opt += f"_{args.rnn_type}" if args.rnn_type != "lstm" else ""
     args.model_name = 'try_scheduler_' + args.framework + '_backbone_' + args.backbone +'_pretrain_' + args.pretrain_dataset + '_eps' + str(args.n_epoch) + '_lr' + str(args.lr_pretrain) + '_bs' + str(args.pretrain_batch_size) \
                       + '_aug1' + args.aug1 + '_aug2' + args.aug2 + '_dim-pdim' + str(args.p) + '-' + str(args.phid) \
                       + '_EMA' + str(args.EMA) + '_criterion_' + args.criterion + '_lambda1_' + str(args.lambda1) + '_lambda2_' + str(args.lambda2) + '_tempunit_' + args.temp_unit  +  model_name_opt
@@ -269,11 +299,15 @@ def setup(args, DEVICE):
     lincl_model_name_opt += f"_lr_lstm_{args.lr_finetune_lstm:.1E}" if args.lr_finetune_lstm != args.lr_finetune_backbone else ""
     lincl_model_name_opt += f"_hrmin_{args.hr_min}" if args.hr_min != 50 else ""
     lincl_model_name_opt += f"_hrmax_{args.hr_max}" if args.hr_max != 110 else ""
+    lincl_model_name_opt += f"_rseed_{args.random_seed}" if args.random_seed != 10 else ""
     lincl_model_name = 'lincls'+ lincl_model_name_opt + "_" + args.backbone + '_dataset_' + args.dataset + '_split' + str(args.split) + '_eps' + str(args.n_epoch) + '_bs' + str(args.batch_size) + "_bestmodel" + '.pt'
 
     args.lincl_model_file = os.path.join(args.model_dir_name, lincl_model_name)
+
+    return args
     
 
+def setup(args, DEVICE):
     model, optimizers = setup_model_optm(args, DEVICE)
 
     # loss fn
@@ -340,6 +374,7 @@ def setup_classifier(args, DEVICE, backbone):
     bb_dim = backbone.out_dim
     classifier = setup_linclf(args, DEVICE, bb_dim)
 
+    # splits the different layers of the model so we can assign different learning rates to them
     lstm_gru_parameters = []
     conv_layers = []
     for name, param in backbone.named_parameters():
@@ -368,13 +403,22 @@ def setup_classifier(args, DEVICE, backbone):
         criterion_cls = LogCoshError()
     elif args.loss == 'CrossEntropy':
         criterion_cls = nn.BCELoss(reduction='mean')
+    elif args.loss == 'NLE':
+        criterion_cls = NLELoss()
     else:
         NotImplementedError
 
     return classifier, criterion_cls, optimizer_cls
 
 
+class NLELoss(nn.Module):
+    def __init__(self):
+        super(NLELoss, self).__init__()
 
+    def forward(self, predicted_values, true_labels):
+        log_uncertainties = predicted_values[..., 1]
+        predicted_values = predicted_values[..., 0]
+        return torch.mean(torch.pow(predicted_values - true_labels, 2) * torch.exp(-log_uncertainties)) #+ log_uncertainties)
 
 
 
@@ -524,12 +568,16 @@ def load_best_model(args, epoch=None):
     
     return best_model
 
-def load_best_lincls(args):
+def load_best_lincls(args, device=None):
+
+    if device is None:
+        device = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
+
     model_dir = args.lincl_model_file
     if not os.path.exists(model_dir):
         print("No model found at {}".format(model_dir))
         return None
-    best_model = torch.load(model_dir)['trained_backbone']
+    best_model = torch.load(model_dir, map_location=device)['trained_backbone']
 
     return best_model
 
@@ -582,22 +630,18 @@ def calculate_lincls_output(sample, target, trained_backbone, criterion, args):
     if len(feat.shape) == 3:
         feat = feat.reshape(feat.shape[0], -1)
     loss = criterion(output, target)
-    predicted = output.data # regression
 
+    
     if "bnn" in args.model_uncertainty:
         kl_loss = get_kl_loss(trained_backbone)/sample.shape[0]
         loss += kl_loss
+    elif args.model_uncertainty == "NLE":
+        predicted = output[..., 0].data
+    else:
+        predicted = output.data
     
 
     return loss, predicted, feat
-
-def calculate_lincls_output_probs(sample, target, trained_backbone, criterion):
-
-    output, feat, probs = trained_backbone(sample)
-    if len(feat.shape) == 3:
-        feat = feat.reshape(feat.shape[0], -1)
-    loss = criterion(output, target)
-    return loss, probs.data, feat, 
 
 
 def add_probability_wrapper(model, args, DEVICE):
@@ -608,6 +652,8 @@ def add_probability_wrapper(model, args, DEVICE):
     elif args.model_uncertainty in ["bnn", "bnn_pretrained", "bnn_pretrained_firstlast"]:
         model = BNN_Wrapper(model, n_classes=args.n_prob_class, n_samples=100)
         model = model.to(DEVICE)
+    elif args.model_uncertainty == "NLE":
+        model = NLE_Wrapper(model, n_classes=args.n_prob_class)
     else:
         model = Uncertainty_Wrapper(model, n_classes=args.n_prob_class)
         model = model.to(DEVICE)
@@ -718,7 +764,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                 logger.debug(f'Val Loss     : {val_loss:.4f}, Val MAE     : {mae_val:.4f}, Val Corr     : {corr_val:.4f}\n')
                 wandb.log({'Val_Loss': val_loss, 'Val_MAE': mae_val, 'Val_Corr': corr_val}, step=epoch)
 
-                if corr_val <= min_val_corr:
+                if corr_val >= min_val_corr:
                     min_val_corr = corr_val
                     best_model = copy.deepcopy(trained_backbone.state_dict())
                     torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, args.lincl_model_file)
@@ -789,13 +835,13 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
                 total += 1
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(target.shape[0], -1)
                 pred, x = model(sample)
-                predicted_sumprod, uncertainty_sumprod = postprocessing(pred, method = "sumprod")
-                predicted_hr_viterbi, _ = postprocessing(pred, method = "viterbi")
+                predicted_sumprod, uncertainty_sumprod, prob_sumprod = postprocessing(pred, method = "sumprod")
+                predicted_hr_viterbi, _, _ = postprocessing(pred, method = "viterbi")
 
                 loss = criterion_cls(pred, target)
                 total_loss += loss.item()
 
-                predicted_hr_sumprod = convert_to_hr(predicted_sumprod, args)
+                predicted_hr_sumprod = convert_to_hr(prob_sumprod, args)
                 predicted_hr = convert_to_hr(pred, args)
                 predicted_hr_viterbi = convert_to_hr(predicted_hr_viterbi, args)
                 target_hr = convert_to_hr(target, args)
@@ -808,7 +854,7 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
                 uncertainties.extend(uncertainty_sumprod.cpu().numpy().reshape(-1))
 
                 if args.save_probabilities:
-                    probs_sumprod.extend(predicted_sumprod.cpu().numpy().reshape(-1, args.n_prob_class))
+                    probs_sumprod.extend(prob_sumprod.cpu().numpy().reshape(-1, args.n_prob_class))
                     probs.extend(pred.cpu().numpy().reshape(-1, args.n_prob_class))
 
         
@@ -851,7 +897,8 @@ def setup_postprocessing_model(args):
                     is_online= False,
                     return_probs= True,
                     uncert = "entropy")
-
+    else:
+        raise NotImplementedError
     return postprocessing_model
 
 def train_postprocessing(train_loader, postprocessing_model, DEVICE, args):

@@ -27,7 +27,7 @@ else:
 
 #%%
 
-""" 
+
 for split in range(5):
     print(f"Processing split {split}")
     X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, split)
@@ -78,7 +78,7 @@ for split in range(5):
     print(f"Saves results to {predictions_path_test}")
     results_df_test.to_pickle(predictions_path_test)
     # Finish the run
-    wandb.finish() """
+    wandb.finish() 
 
 # %%
 split = 0
@@ -140,7 +140,7 @@ for i in range(len(X_test)):
         for i in range(acc_groups.shape[0]):
             frequencies, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=4096 * 2 - 1, fs=100)
             max_amplitude = np.max(np.abs(periodogram))
-            hr_frequenies = (frequencies > 0.5) & (frequencies < 3)
+            hr_frequenies = (frequencies > 0.5) & (frequencies < 2)
 
             if np.any(periodogram[hr_frequenies] > max_amplitude*threshold):
                 selected_indices = np.append(selected_indices, i)
@@ -183,78 +183,3 @@ for i in range(len(X_test)):
 
 results_df = pd.DataFrame(results, columns=["highest_hr_peak", "closest_hr_peak", "hr_true"])
 results_df.to_csv("ssa_results.csv")
-
-
-# %%
-"""
-
-ssr = TROIKA_bcg.SSR(1000, 4096, 100, lambda_factor=0.05)
-acc_spectrum = ssr.transform(ssa_acc)
-import importlib
-importlib.reload(TROIKA_bcg)
-# %%
-
-
-
- # %%
-ssr = TROIKA_bcg.SSR(1000, 4096, 100, lambda_factor=0.0005)
-acc_spectrum = ssr.transform(acc_reconstructed)
-# %%
-
-
-acc_reconstructed
-# %%
-
-f_s = 100
-M = 1000 #num samples in window
-N = 4096 #num frequencies
-lambda_factor = 1
-
-
-# %%
-n_start = (0.1*N//100) - 1
-n_end = (4.4*N//100) + 1
-ns = np.arange(n_start, n_end)
-m, n = np.meshgrid(np.arange(M), np.arange(n_start, n_end), indexing='ij')
-Phi = np.exp(1j * 2 * np.pi / N * m * n)
-# %%
-
-# %%
-from scipy.optimize import minimize
-y = acc_reconstructed
-phi_pinv = np.linalg.pinv(Phi)
-lambda_factor = 500
-x0 = phi_pinv @ y
-print(f"Sparsity: {np.linalg.norm(x0, ord=1)}, estimation quality: {np.linalg.norm(Phi @ x0 - y, ord=2) * lambda_factor}")
-def print_current_target(xk):
-    print(f"Sparsity: {np.linalg.norm(xk, ord=1)}, estimation quality: {np.linalg.norm(Phi @ xk - y, ord=2) * lambda_factor}")
-
-constraints = {
-    'type': 'eq',
-    'fun': lambda x: np.linalg.norm(Phi @ x - y, ord=2) * lambda_factor
-}
-optimize_result = minimize(lambda x: np.linalg.norm(x, ord=1),
-                            x0, method='SLSQP',
-                            options={'maxiter': 5},
-                            constraints=constraints,
-                            callback=print_current_target)
-s_k = optimize_result.x ** 2
-# %%
-
-import cr.sparse.pursuit.mp as mp
-sol = mp.solve(A, acc_reconstructed)
-x = sol.x
-
-#%%
-import cr.sparse.cvx.spgl1 as crspgl1
-sigma=0.
-options = crspgl1.SPGL1Options(max_iters=300)
-tracker = crs.ProgressTracker(every=10)
-x_init = scipy.signal.periodogram(acc_reconstructed, nfft=4096 * 2 - 1)
-sol = crspgl1.solve_bpic_from_jit(A, acc_reconstructed, sigma,
-    x_init, options=options, tracker=tracker)
-# %%
-import cr.sparse.lop as lop
-A = lop.matrix(Phi)
-# %%
- """

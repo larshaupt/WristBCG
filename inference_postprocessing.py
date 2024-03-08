@@ -108,7 +108,7 @@ X, Y_prob, D, P_prob, P_uncert = [], [], [], [], []
 #tau = 1.352632
 tau = 1
 model_test.classifier.set_temperature(tau)
-
+model_test.eval()
 data_loader = val_loader
 
 with torch.no_grad():
