@@ -1,4 +1,5 @@
 data_dir_Max_processed = "/local/home/lhauptmann/thesis/data/MaxDataset_0to7_100Hz"
+data_dir_Max_processed_v2 = "/local/home/lhauptmann/thesis/data/MaxDataset_v2"
 data_dir_Apple_processed = "/local/home/lhauptmann/thesis/data/AppleDataset_0to6_50Hz"
 #data_dir_Apple_processed_100hz = "/local/home/lhauptmann/thesis/data/AppleDataset_22to7_100Hz"
 data_dir_Apple_processed_100hz = "/local/home/lhauptmann/thesis/data/AppleDataset_22to7_100Hz"

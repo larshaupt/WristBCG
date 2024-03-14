@@ -238,7 +238,7 @@ def setup_args(args):
     else:
         assert args.loss == 'CrossEntropy'
 
-    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall"]:
+    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall", "max_v2"]:
         args.n_feature = 3
     
 
@@ -404,7 +404,7 @@ def setup_classifier(args, DEVICE, backbone):
     elif args.loss == 'CrossEntropy':
         criterion_cls = nn.BCELoss(reduction='mean')
     elif args.loss == 'NLE':
-        criterion_cls = NLELoss()
+        criterion_cls = NLELoss(ratio = 0)
     else:
         NotImplementedError
 
@@ -412,13 +412,17 @@ def setup_classifier(args, DEVICE, backbone):
 
 
 class NLELoss(nn.Module):
-    def __init__(self):
+    def __init__(self, ratio=1.0):
         super(NLELoss, self).__init__()
+        self.ratio = ratio
 
     def forward(self, predicted_values, true_labels):
-        log_uncertainties = predicted_values[..., 1]
-        predicted_values = predicted_values[..., 0]
-        return torch.mean(torch.pow(predicted_values - true_labels, 2) * torch.exp(-log_uncertainties)) #+ log_uncertainties)
+        #log_uncertainties = predicted_values[..., 1]
+        #predicted_values = predicted_values[..., 0]
+        predicted_values, log_uncertainties = predicted_values
+        abs_diff = torch.abs(predicted_values - true_labels)
+        return torch.mean(abs_diff) * self.ratio + torch.mean(abs_diff * torch.exp(-log_uncertainties) + log_uncertainties) * (1 - self.ratio)
+        #return torch.mean(torch.abs(predicted_values - true_labels) / log_uncertainties + torch.log(2*log_uncertainties))
 
 
 
@@ -636,7 +640,8 @@ def calculate_lincls_output(sample, target, trained_backbone, criterion, args):
         kl_loss = get_kl_loss(trained_backbone)/sample.shape[0]
         loss += kl_loss
     elif args.model_uncertainty == "NLE":
-        predicted = output[..., 0].data
+        #predicted = output[..., 0].data
+        predicted = output[0].data
     else:
         predicted = output.data
     
@@ -834,16 +839,15 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
             for idx, (sample, target, domain) in enumerate(tepoch):
                 total += 1
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(target.shape[0], -1)
-                pred, x = model(sample)
-                predicted_sumprod, uncertainty_sumprod, prob_sumprod = postprocessing(pred, method = "sumprod")
-                predicted_hr_viterbi, _, _ = postprocessing(pred, method = "viterbi")
+                pred, x, prob = model(sample)
+                predicted_sumprod, uncertainty_sumprod, prob_sumprod = postprocessing(prob, method = "sumprod")
+                predicted_hr_viterbi, _, _ = postprocessing(prob, method = "viterbi")
 
-                loss = criterion_cls(pred, target)
+                loss = criterion_cls(prob, target)
                 total_loss += loss.item()
 
                 predicted_hr_sumprod = convert_to_hr(prob_sumprod, args)
                 predicted_hr = convert_to_hr(pred, args)
-                predicted_hr_viterbi = convert_to_hr(predicted_hr_viterbi, args)
                 target_hr = convert_to_hr(target, args)
 
                 hr_true.extend(target_hr.reshape(-1))
@@ -855,7 +859,7 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
 
                 if args.save_probabilities:
                     probs_sumprod.extend(prob_sumprod.cpu().numpy().reshape(-1, args.n_prob_class))
-                    probs.extend(pred.cpu().numpy().reshape(-1, args.n_prob_class))
+                    probs.extend(prob.cpu().numpy().reshape(-1, args.n_prob_class))
 
         
             logging_table = { 
@@ -873,7 +877,7 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
             hr_true, hr_pred, hr_pred_viterbi, hr_pred_sumprod = np.array(hr_true), np.array(hr_pred), np.array(hr_pred_viterbi), np.array(hr_pred_sumprod)
             
             figure = plot_true_pred(hr_true, hr_pred)
-            wandb.log({"true_pred_{prefix}_post": figure})
+            wandb.log({f"true_pred_{prefix}_post": figure})
             
             mae_test = np.abs(hr_true - hr_pred).mean()
             mae_test_sumprod = np.abs(hr_true - hr_pred_sumprod).mean()

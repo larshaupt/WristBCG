@@ -535,7 +535,11 @@ class Classifier_with_uncertainty(nn.Module):
         self.classifier = nn.Linear(bb_dim, n_classes)
         self.uncertainty = nn.Linear(bb_dim, 1)
 
-    def forward(self, x, method=None):
+        if self.n_classes > 1:
+            # add softmax layer
+            self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
         x = x.reshape(x.shape[0], -1)
         out = self.classifier(x)
 
@@ -544,11 +548,12 @@ class Classifier_with_uncertainty(nn.Module):
             
         uncertainty = self.uncertainty(x)
 
-        return torch.concat((out, uncertainty), dim=-1)
+        #return torch.concat((out, uncertainty), dim=-1)
+        return out, uncertainty
     
     
 class Uncertainty_Wrapper(nn.Module):
-    def __init__(self, base_model, n_classes, return_uncertainty=False, uncertainty_model="variance"):
+    def __init__(self, base_model, n_classes, return_probs=False, uncertainty_model="std"):
         super(Uncertainty_Wrapper, self).__init__()
 
         if hasattr(base_model, 'classifier'):
@@ -558,47 +563,56 @@ class Uncertainty_Wrapper(nn.Module):
 
         self.base_model = base_model
         self.n_classes = n_classes
-        self.return_uncertainty = return_uncertainty
+        self.return_probs = return_probs
         self.uncertainty_model = uncertainty_model
         self.bins = np.array([-np.inf] + list(np.linspace(0, 1, n_classes-1)) + [np.inf])
 
     def forward(self, x):
 
-        out, feat = self.base_model(x)
-
-        if self.return_uncertainty:
-            uncertainty = self._compute_uncertainty(out)
-            return out, uncertainty
-
-        return out, feat
+        probs, feat = self.base_model(x)
+        uncertainty = self._compute_uncertainty(probs)
+        expectation = self._compute_expectation(probs)
+        if self.return_probs:
+            
+            return expectation, uncertainty,  probs
+        
+        return expectation, uncertainty
 
     def _compute_uncertainty(self, probs):
         probs = probs.detach().cpu()
         if self.uncertainty_model == 'entropy':
             return -torch.sum(probs * torch.log(probs), dim=1)
-        elif self.uncertainty_model == 'variance':
-            bins = np.linspace(0, 1, self.n_classes)
+        elif self.uncertainty_model == 'std':
+            bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
+            bins = np.mean([bins[1:], bins[:-1]])
             E_x = torch.sum(probs * bins[None, :], axis=1)
             E_x2 = torch.sum(probs * bins[None, :] ** 2, axis=1)
             return torch.sqrt(E_x2 - E_x**2)
         else:
             raise NotImplementedError
+
+    def _compute_expectation(self, probs):
+        bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
+        bins = np.mean([bins[1:], bins[:-1]])
+        return torch.sum(probs * bins, axis=1)
         
 class NLE_Wrapper(Uncertainty_Wrapper):
-    def __init__(self, base_model, n_classes, return_uncertainty=False, uncertainty_model="variance"):
-        super(NLE_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_uncertainty=return_uncertainty, uncertainty_model=uncertainty_model)
+    def __init__(self, base_model, n_classes, return_probs=False, uncertainty_model="variance"):
+        super(NLE_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_probs=return_probs, uncertainty_model=uncertainty_model)
         assert self.uncertainty_model == 'variance', 'NLE only supports variance as uncertainty model'
         self.bins = torch.Tensor(self.bins)
     def forward(self, x):
         out, feat = self.base_model(x)
 
-        uncertainty = out[...,1].unsqueeze(-1)
-        out = out[...,0].unsqueeze(-1)
+        uncertainty = out[1]
+        uncertainty = torch.exp(uncertainty)
+        expectation = out[0]
+        probs = self._compute_probs(expectation, uncertainty)
 
-        if not self.return_uncertainty:
-            probs = self._compute_probs(out, uncertainty)
-            return probs, feat
-        return uncertainty, feat
+        if self.return_probs:
+            return expectation, uncertainty, probs
+        
+        return expectation, uncertainty
     
     def _compute_probs(self, out, uncertainty):
         device = out.device
@@ -608,8 +622,12 @@ class NLE_Wrapper(Uncertainty_Wrapper):
 
         def gaussian_cdf(x, mu, sigma):
             return 0.5 * (1 + torch.erf((x - mu) / (sigma * np.sqrt(2))))
+        
+        def laplace_cdf(x, mu, b):
+            cdf_values = 0.5 * (1 + np.sign(x - mu) * (1 - np.exp(-np.abs(x - mu) / b)))
+            return cdf_values
 
-        cdf_values = gaussian_cdf(self.bins, out, sigma)
+        cdf_values = laplace_cdf(self.bins, out, sigma)
         bin_probs = cdf_values[:, 1:] - cdf_values[:, :-1]
 
         return bin_probs.to(device)
@@ -641,11 +659,13 @@ class MC_Dropout_Wrapper(Uncertainty_Wrapper):
         probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
         probs = probs.to(x.device)
 
-        if self.return_uncertainty:
-            uncertainty = self._compute_uncertainty(probs)
-            return probs, uncertainty
+        uncertainty = self._compute_uncertainty(probs)
+        expectation = self._compute_expectation(probs)
 
-        return probs, feat
+        if self.return_probs:
+            return expectation, uncertainty, probs
+        
+        return expectation, uncertainty
         
 
 class BNN_Wrapper(Uncertainty_Wrapper):
@@ -667,12 +687,13 @@ class BNN_Wrapper(Uncertainty_Wrapper):
         # Calculate mean and uncertainty
         probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
         probs = probs.to(x.device)
-
-        if self.return_uncertainty:
-            uncertainty = self._compute_uncertainty(probs)
-            return probs, uncertainty
-    
-        return probs, None
+        uncertainty = self._compute_uncertainty(probs)
+        expectation = self._compute_expectation(probs)
+        if self.return_probs:
+            
+            return expectation, uncertainty, probs
+        
+        return expectation, uncertainty
 
 class Projector(nn.Module):
     def __init__(self, model, bb_dim, prev_dim, dim):

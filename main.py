@@ -36,7 +36,7 @@ def get_parser():
     parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'apple100', 'parkinson100'], help='name of dataset')
     parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
     parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
-    parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall"], help='name of dataset for finetuning')
+    parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2"], help='name of dataset for finetuning')
     parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast", "NLE"], help='which method to use to output a probability distribution')
     parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
     parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')

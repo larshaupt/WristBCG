@@ -438,7 +438,16 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
             x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+    
+    elif dataset == 'max_v2':
+        sampling_rate = 100
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_Max_processed_v2
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
         
+
     elif dataset == 'apple':
         sampling_rate = 50
         if args.step_size == 8 and args.window_size == 10:

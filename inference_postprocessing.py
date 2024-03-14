@@ -6,8 +6,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+import seaborn as sns
 from datetime import datetime
 import re
+from scipy.stats import invgauss, norm
 
 from models.backbones import *
 from models.loss import *
@@ -16,6 +18,25 @@ from main import get_parser
 from argparse import Namespace
 
 def ece_loss(y_true, y_pred, bins=10):
+
+    """
+    Calculate the Expected Calibration Error (ECE) between predicted probabilities and true labels.
+
+    ECE measures the discrepancy between predicted probabilities (y_pred) and empirical accuracy (y_true).
+
+    Parameters:
+    y_true (array-like): True labels. Each row corresponds to a sample, and each column corresponds to a class.
+    y_pred (array-like): Predicted probabilities. Each row corresponds to a sample, and each column corresponds to a class.
+    bins (int, optional): Number of equally spaced bins for dividing the range of predicted probabilities. Default is 10.
+
+    Returns:
+    float: The Expected Calibration Error (ECE) value.
+
+    Notes:
+    - The best possible value of ECE is 0, indicating perfect calibration.
+    - The worst possible value of ECE is 1, indicating complete miscalibration.
+    """
+        
     bin_boundaries = np.linspace(0, 1, bins + 1)
     bin_lowers = bin_boundaries[:-1]
     bin_uppers = bin_boundaries[1:]
@@ -37,7 +58,7 @@ def ece_loss(y_true, y_pred, bins=10):
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_bnn_pretrained_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_simsiam_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.0_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/config.json"
 #json_file = '/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_gaussian_classification_disc_hr_64_hrmin_30.0_CorNET_dataset_apple100_split0_eps60_bs128_config.json'
-json_file = '/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_mcdropout_hrmin_30.0_CorNET_dataset_apple100_split0_eps60_bs128_config.json'
+json_file = '/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_NLE_hrmin_30_hrmax_120_CorNET_dataset_apple100_split1_eps60_bs512_config.json'
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_AE_pretrain_max_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm/config.json"
 with open(json_file) as json_file:
     json_args = json.load(json_file)
@@ -65,9 +86,6 @@ elif mode == "pretrain":
 else:
     raise ValueError(f"Mode {mode} not supported")
 
-args.batch_size = 512
-#args.split = split
-args.dataset = "max"
 # %%
 # Testing
 #######################
@@ -75,7 +93,7 @@ DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else
 print('device:', DEVICE, 'dataset:', args.dataset)
 #%%
 # Load data
-train_loader, val_loader, test_loader = setup_dataloaders(args, sample_sequences=True, discrete_hr=True)
+train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
 
 #%%
 # Initialize and load test model
@@ -96,20 +114,20 @@ else:
 model_test.load_state_dict(model_weights, strict=False)
 model_test = model_test.to(DEVICE)
 model_test = add_probability_wrapper(model_test, args, DEVICE)
-model_test.return_uncertainty = True
-model_test.uncertainty_model = "variance"
+model_test.return_probs = True
+model_test.uncertainty_model = "std"
 
 
 #%%
 
-X, Y_prob, D, P_prob, P_uncert = [], [], [], [], []
+X, Y_prob, D, P, P_prob, P_uncert = [], [], [], [], [], []
 #%%
 
 #tau = 1.352632
-tau = 1
-model_test.classifier.set_temperature(tau)
+#tau = 1
+#model_test.classifier.set_temperature(tau)
 model_test.eval()
-data_loader = val_loader
+data_loader = test_loader
 
 with torch.no_grad():
     for i, (x, y, d) in enumerate(data_loader):
@@ -117,7 +135,7 @@ with torch.no_grad():
         x = x.to(DEVICE).float()
         y = y.to(DEVICE)
         d = d.to(DEVICE)
-        p, p_uncert = model_test(x)
+        exp, p_uncert, p = model_test(x)
         x = x.detach().cpu().numpy()
         y = y.detach().cpu().numpy()
         d = d.detach().cpu().numpy()
@@ -128,13 +146,14 @@ with torch.no_grad():
         D.append(d)
         P_prob.append(p)
         P_uncert.append(p_uncert)
+        P.append(convert_to_hr(exp, args))
 
 
 Y = [convert_to_hr(el, args) for el in Y_prob]
-P = [convert_to_hr(el, args) for el in P_prob]
+
 
 Y_concat = np.concatenate(Y)
-P_concat = np.concatenate(P)
+P_concat = np.concatenate(P).squeeze()
 D_concat = np.concatenate(D)
 X_concat = np.concatenate(X)
 P_prob_concat = np.concatenate(P_prob)
@@ -161,9 +180,41 @@ print(f"ECE: {ece}")
 
 #%%
 
+def confidence_plot(uncert, pred_expectation, y, ax=None, name="", distribution="gaussian"):
+
+    if ax is None:
+        fig, ax = plt.subplots(1,1, figsize=(10,5))
+
+
+    def gaussian_confidence_interval(conf, uncert):
+        return np.abs(norm.ppf(conf, loc=0, scale=uncert))
+
+    def laplace_confidence_interval(conf, uncert):
+        return - uncert * np.log(conf)
+    if distribution == "gaussian":
+        conf_function = gaussian_confidence_interval
+    elif distribution == "laplace":
+        conf_function = laplace_confidence_interval
+
+    conf_scores = []
+    for conf in np.linspace(0, 1, 11):
+        conf_interval = conf_function(uncert, conf).reshape(-1)
+        inside_confidence_interval = (Y > pred_expectation - conf_interval) & (Y < pred_expectation + conf_interval)
+        conf_score = inside_confidence_interval.sum() / len(inside_confidence_interval)
+        conf_scores.append((conf, conf_score))
+    df_conf_scores = pandas.DataFrame(conf_scores, columns=["Confidence", "Score"])
+    df_conf_scores["Confidence"] = df_conf_scores["Confidence"].round(1)
+    df_conf_scores.plot.bar(x="Confidence", y="Score", ax=ax, label=name)
+    ax.set_xlabel("Confidence")
+    ax.set_ylabel("Percentage of data inside confidence interval")
+    ax.set_title("Confidence Calibration")
+    ax.set_ylim(0,1)
+    ax.plot(np.arange(0,1.1,0.1), color="red")
+#%%
+
 df_res = pandas.DataFrame({"Y": Y_concat, 
                            "P": P_concat,
-                           "uncert": P_uncert_concat,
+                           "uncert": P_uncert_concat.reshape(-1),
                            "sub": [el[0] for el in D_concat],
                             "time": [el[1] for el in D_concat], 
                            "X": [el for el in X_concat]})
@@ -257,7 +308,7 @@ uncerts, probs, preds = np.zeros_like(Y_concat), np.zeros_like(P_prob_concat), n
 for sub in subjects:
     sub_index = D_concat[:,0] == sub
     hr_pred, uncert, hr_pred_prob = postprocessing_model(torch.Tensor(np.concatenate(P_prob)[sub_index]).to(DEVICE), 
-                method="viterbi")
+                method="raw")
     preds[sub_index] = hr_pred.cpu().numpy()
 
     if uncert is not None:
@@ -372,44 +423,5 @@ def plot_hit_rate(HR_true, HR_pred_probs, ax=None,  name="", hrmin=50, hrmax = 1
 plot_hit_rate(Y_concat, probs, name="Raw Prediction", hrmin = args.hr_min, hrmax = args.hr_max)
 
 
-# %%
-P_trace = [np.concatenate(P_prob[262:267], axis=0)]
-Y_true_trace = np.concatenate(Y[262:267], axis=0)
-Time_trace = np.concatenate(D[262:267], axis=0)[:,1]
-i = np.argsort([len(el) for el in P_prob])[::-1][0]
-
-Y_sum = [postprocessing_model(torch.Tensor(el).to(DEVICE), method="sumprod") for el in P_trace]
-Y_sum_uncert = [el[1].cpu().numpy() for el in Y_sum]
-Y_sum = [el[0].cpu().numpy() for el in Y_sum]
 
 
-
-#%%
-Y_vit = [postprocessing_model(torch.Tensor(el).to(DEVICE), method="viterbi")[0].cpu().numpy() for el in P_trace]
-#%%
-Y_raw = [postprocessing_model(torch.Tensor(el).to(DEVICE), method="raw") for el in P_trace]
-Y_raw_uncert = [el[1].cpu().numpy() for el in Y_raw]
-Y_raw = [el[0].cpu().numpy() for el in Y_raw]
-
-#%%
-
-name = "Raw Prediction"
-trace = Y_sum[0]
-
-fig, ax = plt.subplots(1,1, figsize=(10,5), sharex=True)
-
-ax.plot(Time_trace, Y_true_trace, marker=".", label="Ground Truth", alpha=0.7)
-#ax.plot(Time_trace, Y_sum[0], marker=".", label="Postprocessed", alpha=0.7)
-ax.plot(Time_trace, trace, marker=".", label=name, alpha=0.7)
-#ax.plot(Time_trace, Y_vit[0], marker=".", label="Viterbi", alpha=0.7)
-
-
-
-
-ax.set_xlabel("Time [ms]")
-ax.set_ylabel("HR [bpm]")
-ax.set_ylim(50, 100)
-ax.legend()
-corr = np.corrcoef(Y_true_trace,trace)[0,1]
-mae = np.mean(np.abs(Y_true_trace-trace))
-ax.set_title(f"Correlation: {corr:.2f}, MAE: {mae:.2f}")
