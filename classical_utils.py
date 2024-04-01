@@ -1,3 +1,4 @@
+#%%
 import os
 import json
 import pandas as pd
@@ -7,8 +8,9 @@ import sys
 import heartpy as hp
 import ssa_hr
 from scipy.signal import find_peaks, find_peaks_cwt
-
-sys.path.append("/local/home/lhauptmann/thesis/t-mt-2023-WristBCG-LarsHauptmann/source")
+import scipy
+from scipy.signal import butter, sosfiltfilt, hilbert, correlate
+import TROIKA_bcg
 import data_utils
 
 def load_subjects(dataset_dir, subject_paths):
@@ -58,8 +60,9 @@ def load_dataset(dataset_dir, split, load_train=False):
     else:
         return X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
 
-def compute_hr_bioglass(X, fs = None, peak_distance = 0.5, peak_prominence = 0.3):
+def compute_hr_bioglass(X, fs = None, **kwargs):
     
+
 
     if hasattr(X, "fs"):
         fs = X.fs
@@ -73,16 +76,16 @@ def compute_hr_bioglass(X, fs = None, peak_distance = 0.5, peak_prominence = 0.3
     df_snip_processed = data_utils.full_a_processing(X, fs)
     filtered_signal = df_snip_processed["mag_filtered"]
 
-    filtered_signal = hp.scale_data(filtered_signal)
-    filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
-    filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
+    #filtered_signal = hp.scale_data(filtered_signal)
+    #filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
+    #filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
     #ecg = hp.enhance_ecg_peaks(hp.scale_data(ecg), fs, aggregation='median', iterations=5)
 
     hr_rr = extract_hr_peaks(filtered_signal, fs)
     return hr_rr
 
 
-def compute_hr_ssa(X, fs = None, lagged_window_size = 501, first_n_components=20, peak_distance = 0.5, peak_prominence = 0.3):
+def compute_hr_ssa(X, fs = None, lagged_window_size = 501, first_n_components=20, **kwargs):
     if hasattr(X, "fs"):
         fs = X.fs
     else:
@@ -136,3 +139,123 @@ def single_channel_butterworth_bandpass(signal, fs, low, high, order=4):
         sos = butter(order, [low, high], btype='bandpass', fs=fs, output='sos')
     filtered = sosfiltfilt(sos, signal)
     return filtered
+
+
+
+
+def wcorr(ts1: np.ndarray, ts2: np.ndarray) -> float:
+    """
+    weighted correlation of ts1 and ts2.
+    w is precomputed for reuse.
+    """
+    L = 500
+    N = 1000
+    K = N - L + 1
+    w = np.concatenate((np.arange(1, L+1), np.full((K-L,), L), np.arange(L-1, 0, -1)))
+    w_covar = (w * ts1 * ts2).sum()
+    ts1_w_norm = np.sqrt((w * ts1 * ts1).sum())
+    ts2_w_norm = np.sqrt((w * ts2 * ts2).sum())
+    
+    return w_covar / (ts1_w_norm * ts2_w_norm)
+
+
+def select_components(acc_groups, threshold=0.1):
+    selected_indices = []
+    for i in range(acc_groups.shape[0]):
+        _, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=4096 * 2 - 1)
+        frequencies = np.linspace(0,100, 4096)
+        max_amplitude = np.max(np.abs(periodogram))
+        hr_frequenies = (frequencies > 0.5) & (frequencies < 4)
+
+        if np.any(periodogram[hr_frequenies] > max_amplitude*threshold):
+            selected_indices = np.append(selected_indices, i)
+
+    selected_indices = np.array(selected_indices, dtype=int)
+    acc_reconstructed = acc_groups[selected_indices,:].sum(axis=0)
+    return acc_reconstructed
+
+def compute_hr_troika_w_tracking(X, fs=100, f_low=0.5, f_high=4, **kwargs):
+    troika = TROIKA_bcg.Troika(window_duration=10, acc_sampling_freq=fs, cutoff_freqs=(f_low, f_high))
+    hr = []
+    for hr_i in troika.transform(X):
+        hr.append(hr_i)
+    return hr
+
+def compute_hr_troika(X, fs=100, n_freq=4096, f_low=0.5, f_high=4, **kwargs):
+
+    acc_x = data_utils.butterworth_bandpass(X[:,0], low=f_low, high=f_high, fs=fs)
+    acc_y = data_utils.butterworth_bandpass(X[:,1], low=f_low, high=f_high, fs=fs)
+    acc_z = data_utils.butterworth_bandpass(X[:,2], low=f_low, high=f_high, fs=fs)
+    acc_groups_x, wcorr_x = TROIKA_bcg.ssa(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
+    acc_groups_y, wcorr_y = TROIKA_bcg.ssa(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
+    acc_groups_z, wcorr_z = TROIKA_bcg.ssa(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
+
+
+    def select_components(acc_groups, threshold=0.1):
+        selected_indices = []
+        for i in range(acc_groups.shape[0]):
+            frequencies, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=n_freq * 2 - 1, fs=fs)
+            max_amplitude = np.max(np.abs(periodogram))
+            hr_frequenies = (frequencies > 0.5) & (frequencies < 2)
+
+            if np.any(periodogram[hr_frequenies] > max_amplitude*threshold):
+                selected_indices = np.append(selected_indices, i)
+        #print(selected_indices)
+        selected_indices = np.array(selected_indices, dtype=int)
+        acc_reconstructed = acc_groups[selected_indices,:].sum(axis=0)
+        return acc_reconstructed
+
+
+    acc_reconstructed_x = select_components(acc_groups_x)
+    acc_reconstructed_y = select_components(acc_groups_y)
+    acc_reconstructed_z = select_components(acc_groups_z)
+
+    acc_reconstructed = np.sqrt(acc_reconstructed_x**2 + acc_reconstructed_y**2 + acc_reconstructed_z**2)
+
+
+    # differentiating for more robustness
+    acc_reconstructed = np.diff(acc_reconstructed)
+
+    frequencies, periodogram = scipy.signal.periodogram(acc_reconstructed, nfft=n_freq * 2 - 1, fs=fs)
+
+
+    hr_frequenies_ind = (frequencies > 0.5) & (frequencies < 2)
+    hr_periodogram, hr_frequenies = periodogram[hr_frequenies_ind], frequencies[hr_frequenies_ind]
+    hr_peak_ind = scipy.signal.find_peaks(hr_periodogram)[0]
+    highest_hr_peak_ind = np.argsort(hr_periodogram[hr_peak_ind])[::-1][:10]
+
+    highest_hr_peaks = hr_frequenies[hr_peak_ind[highest_hr_peak_ind]] * 60
+    highest_hr_peak = highest_hr_peaks[0]
+    return highest_hr_peak
+
+#%%
+
+def compute_hr_kantelhardt(X, fs=100, peak_detection = "classical", **kwargs): 
+
+    X = data_utils.butterworth_bandpass(X, low=5, high=14, fs=fs)
+    X = np.apply_along_axis(lambda x: np.abs(hilbert(x)), 0, X)
+
+    if peak_detection == "classical":
+        peaks = [find_peaks(x, distance=0.5*fs, height=0.3 * np.quantile(x, 0.9))[0] for x in X.T]
+    elif peak_detection == "cwt":
+        peaks = [find_peaks_cwt(x, np.arange(5,80)) for x in X.T]
+    peaks_diff = [np.diff(p) for p in peaks]
+    peaks_diff = [p[(p > 0.5*fs) & (p < 1.5*fs)] for p in peaks_diff]
+    hr_canditates = np.array([60*fs/np.mean(p) for p in peaks_diff])
+
+    possible_axes = (hr_canditates>40) & (hr_canditates<200)
+
+    if np.sum(possible_axes) > 1:
+        # compute autocorrelation function of hilbert output
+        X_autocorr = np.apply_along_axis(lambda x: np.correlate(x, x, mode='full'), 0, X)
+        X_autocorr_selected = X_autocorr[int(len(X_autocorr)//2 + 0.4*fs): int(len(X_autocorr)//2 + 1.5*fs)]
+        selected_axis = np.argmax(np.max(X_autocorr_selected, axis=0))
+    elif np.sum(possible_axes) == 1:
+        selected_axis = np.argmax(possible_axes)
+    else: # no axis found, take x axis
+        selected_axis = 0
+
+    hr = hr_canditates[selected_axis]
+    return hr
+
+# %%

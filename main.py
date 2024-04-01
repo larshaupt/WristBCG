@@ -33,10 +33,10 @@ def get_parser():
     parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
     # dataset
-    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'apple100', 'parkinson100'], help='name of dataset')
+    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'apple100', 'parkinson100', 'max_v2'], help='name of dataset')
     parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
     parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
-    parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2"], help='name of dataset for finetuning')
+    parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
     parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast", "NLE"], help='which method to use to output a probability distribution')
     parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
     parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')
@@ -46,6 +46,7 @@ def get_parser():
     parser.add_argument('--n_class', type=int, default=1, help='number of class')
     parser.add_argument('--n_prob_class', type=int, default=64, help='number of class for probability distribution')
     parser.add_argument('--split', type=int, default=0, help='split number')
+    parser.add_argument('--split_by', type=str, default='subject', choices=['subject', 'time'], help='split by subject or time')
     parser.add_argument('--hr_min', type=float, default=30, help='minimum heart rate for training, not needed for pretraining')
     parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rate for training, not needed for pretraining')
     parser.add_argument('--sampling_rate', type=int, default=0, help='sampling rate of the data. Warning: this will take longer time to load data')
@@ -62,6 +63,7 @@ def get_parser():
     parser.add_argument('--add_frequency', type=bool, default=False, help='if or not to add frequency to the input signal')
     parser.add_argument('--bandpass_freq_min', type=float, default=0.1, help='minimum frequency for bandpass filter')
     parser.add_argument('--bandpass_freq_max', type=float, default=18, help='maximum frequency for bandpass filter')
+    parser.add_argument('--hr_smoothing', type=int, default=1, help='smoothing of heart rate, window size')
     
     # augmentation
     parser.add_argument('--aug1', type=str, default='jit_scal',
@@ -73,7 +75,7 @@ def get_parser():
 
     # framework
     parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction'], help='name of framework')
-    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Transformer', 'CorNET'], help='name of backbone network')
+    parser.add_argument('--backbone', type=str, default='AttentionCorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET'], help='name of backbone network')
     parser.add_argument('--num_kernels', type=int, default=16, help='number of kernels in CNN')
     parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
     parser.add_argument('--lstm_units', type=int, default=192, help='number of units in LSTM')
@@ -141,8 +143,8 @@ if __name__ == '__main__':
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
     # setup model, optimizer, scheduler, criterion, logger
     args = setup_args(args)
-    mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
-    train_loaders, val_loader, test_loader = setup_dataloaders(args, mode=mode)
+    initial_mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
+    train_loaders, val_loader, test_loader = setup_dataloaders(args, mode=initial_mode)
     model, optimizers, schedulers, criterion, logger = setup(args, DEVICE)
 
     # save config file
@@ -187,7 +189,8 @@ if __name__ == '__main__':
     if args.finetune:
 
         # setup dataloader for finetuning
-        train_loaders, val_loader, test_loader = setup_dataloaders(args, mode="finetuning")
+        if initial_mode != 'finetuning':
+            train_loaders, val_loader, test_loader = setup_dataloaders(args, mode="finetuning")
         print('device:', DEVICE, 'dataset:', args.dataset)
         
 
@@ -214,7 +217,10 @@ if __name__ == '__main__':
 
     if args.postprocessing != 'none':
         criterion_post = nn.BCELoss(reduction='mean')
-        train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
+        if initial_mode != 'postprocessing':
+            train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
+            print('device:', DEVICE, 'dataset:', args.dataset)
+
         trained_backbone = add_probability_wrapper(trained_backbone, args, DEVICE)
         postprocessing_model = setup_postprocessing_model(args)
         

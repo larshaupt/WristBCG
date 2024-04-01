@@ -5,13 +5,15 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 
+
+
 #%%
 from .attention import *
 from .MMB import *
 
 #%%
 class FCN(nn.Module):
-    def __init__(self, n_channels, n_classes, out_channels=128, input_size:int=500, backbone=True):
+    def __init__(self, n_channels, n_classes, conv_kernels=64, kernel_size=8, out_channels=128, input_size:int=500, backbone=True):
         super(FCN, self).__init__()
 
         self.backbone = backbone
@@ -22,20 +24,20 @@ class FCN(nn.Module):
         # vector size after pooling layer is given by:
         # (input_size - kernel_size + 2 * padding) / stride + 1
         
-        self.conv_block1 = nn.Sequential(nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
-                                         nn.BatchNorm1d(32),
+        self.conv_block1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=4),
+                                         nn.BatchNorm1d(conv_kernels),
                                          nn.ReLU(),
                                          nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
                                          nn.Dropout(0.35))
         out_len = (input_size - 8 + 2 * 4) // 1 + 1
         out_len = (out_len - 2 + 2 * 1) // 2 + 1
-        self.conv_block2 = nn.Sequential(nn.Conv1d(32, 64, kernel_size=8, stride=1, bias=False, padding=4),
-                                         nn.BatchNorm1d(64),
+        self.conv_block2 = nn.Sequential(nn.Conv1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=4),
+                                         nn.BatchNorm1d(conv_kernels),
                                          nn.ReLU(),
                                          nn.MaxPool1d(kernel_size=2, stride=2, padding=1))
         out_len = (out_len - 8 + 2 * 4) // 1 + 1
         out_len = (out_len - 2 + 2 * 1) // 2 + 1
-        self.conv_block3 = nn.Sequential(nn.Conv1d(64, out_channels, kernel_size=8, stride=1, bias=False, padding=4),
+        self.conv_block3 = nn.Sequential(nn.Conv1d(conv_kernels, out_channels, kernel_size=kernel_size, stride=1, bias=False, padding=4),
                                          nn.BatchNorm1d(out_channels),
                                          nn.ReLU(),
                                          nn.MaxPool1d(kernel_size=2, stride=2, padding=1))
@@ -149,6 +151,8 @@ class CorNET(nn.Module):
 
 
 
+
+
 class DeepConvLSTM(nn.Module):
     def __init__(self, n_channels, n_classes, conv_kernels=64, kernel_size=5, LSTM_units=128, input_size:int=500, backbone=True):
         super(DeepConvLSTM, self).__init__()
@@ -194,15 +198,204 @@ class DeepConvLSTM(nn.Module):
     def set_classification_head(self, classifier):
         self.classifier = classifier
         self.backbone = False
+
+
+#%%
+class ChannelAttention(nn.Module):
+    def __init__(self, feature_channels, n_channels, sequence_length):
+        super(ChannelAttention, self).__init__()
+        self.feature_channels = feature_channels
+        self.n_channels = n_channels
+        self.sequence_length = sequence_length
+        self.features_per_channel = feature_channels // n_channels
+        assert self.feature_channels % self.n_channels == 0, "in_channels must be divisible by n_channels"
+        self.attn = nn.Linear(sequence_length * self.features_per_channel, 1)
+
+    def forward(self, encoder_outputs):
+        # Reshape to split features into equal chunks for each channel
+        encoder_outputs = encoder_outputs.view(encoder_outputs.size(0), self.n_channels, self.features_per_channel, -1)
+        # Flatten to fit linear layer input size
+        encoder_outputs = encoder_outputs.view(encoder_outputs.size(0), self.n_channels, -1)
+        # Compute attention scores along the channel dimension
+        energy = torch.tanh(self.attn(encoder_outputs))
+        # Apply softmax to get attention weights
+        attention_weights = torch.softmax(energy, dim=1)
+        # Weighted sum along the channel dimension
+        context_vector = torch.sum(attention_weights * encoder_outputs, dim=1)
+        context_vector = context_vector.view(context_vector.size(0),self.features_per_channel, -1)
+        return context_vector
+
+
+#%%
+class AttentionCorNET(nn.Module):
+    # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
+    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True, rnn_type="lstm"):
+        super(AttentionCorNET, self).__init__()
+        # vector size after a convolutional layer is given by:
+        # (input_size - kernel_size + 2 * padding) / stride + 1
+        
+        conv_kernels = conv_kernels * n_channels
+        self.activation = nn.ELU()
+        self.backbone = backbone
+        self.n_classes = n_classes
+        self.dropout = nn.Dropout(0.1)
+        self.conv1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0, groups=n_channels),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.maxpool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+        out_len = (input_size - kernel_size + 2 * 0) // 1 + 1
+        out_len = (out_len - 4 + 2 * 0) // 4 + 1
+        self.conv2 = nn.Sequential(nn.Conv1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0, groups=n_channels),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.maxpool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+                                         
+        out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
+        self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
+
+        self.attention = ChannelAttention(conv_kernels, n_channels, self.out_len)
+
+        out_feat = conv_kernels // n_channels
+
+        # should be 50 with default parameters
+        
+        if rnn_type == "lstm":
+            self.lstm = nn.LSTM(input_size=out_feat, hidden_size=LSTM_units, num_layers=2, bidirectional=False)
+            self.out_dim = LSTM_units
+        elif rnn_type == "lstm_bi":
+            self.lstm = nn.LSTM(input_size=out_feat, hidden_size=LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        elif rnn_type == "gru":
+            self.lstm = nn.GRU(input_size=out_feat, hidden_size=LSTM_units, num_layers=2, bidirectional=False)
+            self.out_dim = LSTM_units
+        elif rnn_type == "gru_bi":
+            self.lstm = nn.GRU(input_size=out_feat, hidden_size=LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        else:
+            raise NotImplementedError
+        
+
+        if backbone == False:
+            self.classifier = nn.Linear(LSTM_units, n_classes) 
+
+    def forward(self, x):
+        self.lstm.flatten_parameters()
+        x = x.permute(0, 2, 1)
+        x = self.conv1(x)
+        x = self.maxpool1(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = self.maxpool2(x)
+        x = self.dropout(x)
+        x = self.attention(x)
+        x = x.permute(2, 0, 1)
+        # shape is (L, N, H_in)
+        # L - seq_len, N - batch_size, H_in - input_size
+        # L = 19
+        # N = 64
+        # H_in = 32
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+
+
+        x, h = self.lstm(x)
+        x = x[-1, :, :]
+
+        if self.backbone:
+            return None, x
+        else:
+            out = self.classifier(x)
+            return out, x
+
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+
+
+#%%
+
+class DeepConvLSTM(nn.Module):
+    def __init__(self, n_channels, n_classes, conv_kernels=64, kernel_size=5, LSTM_units=128, rnn_type = "gru", input_size:int=500, backbone=True):
+        super(DeepConvLSTM, self).__init__()
+        self.backbone = backbone
+        self.rnn_type = rnn_type
+
+        self.conv1 = nn.Conv2d(1, conv_kernels, (kernel_size, 1))
+        self.conv2 = nn.Conv2d(conv_kernels, conv_kernels, (kernel_size, 1))
+        self.conv3 = nn.Conv2d(conv_kernels, conv_kernels, (kernel_size, 1))
+        self.conv4 = nn.Conv2d(conv_kernels, conv_kernels, (kernel_size, 1))
+
+        self.dropout = nn.Dropout(0.5)
+        if rnn_type == "lstm":
+            self.lstm = nn.LSTM(n_channels * conv_kernels, LSTM_units, num_layers=2)
+            self.out_dim = LSTM_units
+        elif rnn_type == "lstm_bi":
+            self.lstm = nn.LSTM(n_channels * conv_kernels, LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        elif rnn_type == "gru": 
+            self.lstm = nn.GRU(n_channels * conv_kernels, LSTM_units, num_layers=2)
+            self.out_dim = LSTM_units
+        elif rnn_type == "gru_bi":
+            self.lstm = nn.GRU(n_channels * conv_kernels, LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        else:
+            raise NotImplementedError
+
+
+
+        if backbone == False:
+            self.classifier = nn.Linear(LSTM_units, n_classes)
+
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        self.lstm.flatten_parameters()
+        x = x.unsqueeze(1)
+        x = self.activation(self.conv1(x))
+        x = self.activation(self.conv2(x))
+        x = self.activation(self.conv3(x))
+        x = self.activation(self.conv4(x))
+
+        x = x.permute(2, 0, 3, 1)
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+
+        x = self.dropout(x)
+        
+        x, h = self.lstm(x)
+        x = x[-1, :, :]
+
+        if self.backbone:
+            return None, x
+        else:
+            out = self.classifier(x)
+            return out, x
+        
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
 #%%
 class LSTM(nn.Module):
-    def __init__(self, n_channels, n_classes, LSTM_units=128, backbone=True):
+    def __init__(self, n_channels, n_classes, LSTM_units=128, rnn_type="lstm", backbone=True):
         super(LSTM, self).__init__()
-
+        self.rnn_type = rnn_type
         self.backbone = backbone
-        self.lstm = nn.LSTM(n_channels, LSTM_units, num_layers=2)
-        self.out_dim = LSTM_units
-
+        if rnn_type == "lstm":
+            self.lstm = nn.LSTM(n_channels, LSTM_units, num_layers=2)
+            self.out_dim = LSTM_units
+        elif rnn_type == "lstm_bi":
+            self.lstm = nn.LSTM(n_channels, LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        elif rnn_type == "gru":
+            self.lstm = nn.GRU(n_channels, LSTM_units, num_layers=2)
+            self.out_dim = LSTM_units
+        elif rnn_type == "gru_bi":
+            self.lstm = nn.GRU(n_channels, LSTM_units, num_layers=2, bidirectional=True)
+            self.out_dim = LSTM_units * 2
+        else:
+            raise NotImplementedError
+        
         if backbone == False:
             self.classifier = nn.Linear(LSTM_units, n_classes)
 
@@ -217,6 +410,10 @@ class LSTM(nn.Module):
         else:
             out = self.classifier(x)
             return out, x
+
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
 
 class AE_encoder(nn.Module):
     def __init__(self, n_channels, input_size, n_classes=1, out_dim=128, backbone=True):
@@ -294,8 +491,6 @@ class AE(nn.Module):
         self.encoder = AE_encoder(n_channels, input_size, n_classes, self.embdedded_size, backbone)
         self.decoder = AE_decoder(n_channels, input_size, self.embdedded_size, n_channels_out)
 
-
-
     def forward(self, x):
         
         out, x_encoded = self.encoder(x)
@@ -312,44 +507,82 @@ class AE(nn.Module):
         self.backbone = False
 
 class CNN_AE_encoder(nn.Module):
-    def __init__(self, n_channels, input_size: int = 1000, n_classes=1, out_dim=128, backbone=True):
+    def __init__(self, n_channels, 
+                 conv_kernels=64, 
+                 kernel_size=8, 
+                 input_size: int = 1000, 
+                 n_classes=1, 
+                 out_dim=128, 
+                 backbone=True, 
+                 activation="elu",
+                 num_layers=2,
+                 dropout=0.1):
+        
         super(CNN_AE_encoder, self).__init__()
         self.input_size = input_size
         self.n_channels = n_channels
         self.backbone = backbone
         self.out_dim = out_dim
+        self.num_layers = num_layers
+        assert num_layers in [2, 3], "Only 2 or 3 layers are supported"
+        if activation == "relu":
+            activation_func = nn.ReLU()
+        elif activation == "elu":
+            activation_func = nn.ELU()
+        else:
+            raise NotImplementedError
 
+
+        """
+        
+        self.conv1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.maxpool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+        out_len = (input_size - kernel_size + 2 * 0) // 1 + 1
+        out_len = (out_len - 4 + 2 * 0) // 4 + 1
+        self.conv2 = nn.Sequential(nn.Conv1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                                         nn.BatchNorm1d(conv_kernels),
+                                         self.activation
+                                         )
+        self.maxpool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=False)
+                                         
+        out_len = (out_len - kernel_size + 2 * 0) // 1 + 1
+        self.out_len = (out_len - 4 + 2 * 0) // 4 + 1
+
+        """
 
         self.e_conv1 = nn.Sequential(
-            nn.Conv1d(n_channels, 32, kernel_size=8, stride=1, bias=False, padding=4),
-            nn.BatchNorm1d(32),
-            nn.ReLU()
+            nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+            nn.BatchNorm1d(conv_kernels),
+            activation_func
         )
-        self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
-        self.dropout = nn.Dropout(0.35)
-
-        out_size = (input_size - 8 + 2 * 4) // 1 + 1
-        out_size = (out_size - 2 + 2 * 1) // 2 + 1
+        self.pool1 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=True)
+        self.dropout = nn.Dropout(dropout)
+        out_size = input_size
+        out_size = (out_size - kernel_size + 2 * 0) // 1 + 1
+        out_size = (out_size - 4 + 2 * 0) // 4 + 1
 
         self.e_conv2 = nn.Sequential(
-            nn.Conv1d(32, 64, kernel_size=8, stride=1, bias=False, padding=4),
-            nn.BatchNorm1d(64),
-            nn.ReLU()
+            nn.Conv1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+            nn.BatchNorm1d(conv_kernels),
+            activation_func
         )
-        self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
-        out_size = (out_size - 8 + 2 * 4) // 1 + 1
-        out_size = (out_size - 2 + 2 * 1) // 2 + 1
+        self.pool2 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=True)
+        out_size = (out_size - kernel_size + 2 * 0) // 1 + 1
+        out_size = (out_size - 4 + 2 * 0) // 4 + 1
 
-        self.e_conv3 = nn.Sequential(
-            nn.Conv1d(64, self.out_dim, kernel_size=8, stride=1, bias=False, padding=4),
-            nn.BatchNorm1d(self.out_dim),
-            nn.ReLU()
-        )
-        self.pool3 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1, return_indices=True)
-        out_size = (out_size - 8 + 2 * 4) // 1 + 1
-        out_size = (out_size - 2 + 2 * 1) // 2 + 1
+        if num_layers == 3:
+            self.e_conv3 = nn.Sequential(
+                nn.Conv1d(conv_kernels, self.out_dim, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                nn.BatchNorm1d(self.out_dim),
+                activation_func
+            )
+            self.pool3 = nn.MaxPool1d(kernel_size=4, stride=4, padding=0, return_indices=True)
+            out_size = (out_size - kernel_size + 2 * 0) // 1 + 1
+            out_size = (out_size - 4 + 2 * 0) // 4 + 1
         self.output_length = out_size
-
         if not self.backbone:
             self.classifier = nn.Linear(self.out_dim*out_size, n_classes)
 
@@ -364,16 +597,21 @@ class CNN_AE_encoder(nn.Module):
         x = self.e_conv2(x)
         pool2_size = x.shape
         x, indice2 = self.pool2(x)
-        x = self.e_conv3(x)
-        pool3_size = x.shape
-        x_encoded, indice3 = self.pool3(x)
+        x = self.dropout(x)
+        if self.num_layers == 3:
+            x = self.e_conv3(x)
+            pool3_size = x.shape
+            x, indice3 = self.pool3(x)
+        else:
+            indice3 = None
+            pool3_size = None
 
 
         if self.backbone:
-            return None, x_encoded, (indice1, indice2, indice3), (pool1_size, pool2_size, pool3_size)
+            return None, x, (indice1, indice2, indice3), (pool1_size, pool2_size, pool3_size)
         else:
-            out = self.classifier(x_encoded)
-            return out, x_encoded #, (indice1, indice2, indice3), (pool1_size, pool2_size, pool3_size)
+            out = self.classifier(x)
+            return out, x #, (indice1, indice2, indice3), (pool1_size, pool2_size, pool3_size)
         
     def set_classification_head(self, classifier):
         self.classifier = classifier
@@ -381,68 +619,121 @@ class CNN_AE_encoder(nn.Module):
 
 
 class CNN_AE_decoder(nn.Module):
-    def __init__(self, out_channels, n_channels_out, input_size: int = 500):
+    def __init__(self, out_channels,
+                  n_channels_out, 
+                  conv_kernels=64, 
+                  kernel_size=8, 
+                  input_size: int = 1000, 
+                  activation="elu",
+                  num_layers=2,
+                  dropout=0.1):
         super(CNN_AE_decoder, self).__init__()
         self.input_size = input_size
         self.n_channels_out = n_channels_out
+        self.num_layers = num_layers
+        self.dropout = nn.Dropout(dropout)
 
         out_size = input_size
+        if activation == "relu":
+            activation_func = nn.ReLU()
+        elif activation == "elu":
+            activation_func = nn.ELU()
+        else:
+            raise NotImplementedError
+        
+        if num_layers == 3:
+            self.unpool1 = nn.MaxUnpool1d(kernel_size=4, stride=4, padding=0)
+            self.d_conv1 = nn.Sequential(
+                nn.ConvTranspose1d(out_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+                nn.BatchNorm1d(conv_kernels),
+                activation_func
+            )
+            # out_size = (out_size -)
+            out_size = (out_size - 1) * 4 - 2 * 0 + 4
+            out_size = (out_size - 1) * 1 - 2 * 0 + kernel_size
+            self.lin1 = nn.Identity()
 
-        self.unpool1 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
-        self.d_conv1 = nn.Sequential(
-            nn.ConvTranspose1d(out_channels, 64, kernel_size=8, stride=1, bias=False, padding=4),
-            nn.BatchNorm1d(64),
-            nn.ReLU()
-        )
-        out_size = (out_size - 1) * 2 - 2 * 1 + 2
-        out_size = (out_size - 1) * 1 - 2 * 4 + 8
-        self.lin1 = nn.Identity()
-
-        self.unpool2 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
+        self.unpool2 = nn.MaxUnpool1d(kernel_size=4, stride=4, padding=0)
         self.d_conv2 = nn.Sequential(
-            nn.ConvTranspose1d(64, 32, kernel_size=8, stride=1, bias=False, padding=4),
-            nn.BatchNorm1d(32),
-            nn.ReLU()
+            nn.ConvTranspose1d(conv_kernels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
+            nn.BatchNorm1d(conv_kernels),
+            activation_func
         )
-        out_size = (out_size - 1) * 2 - 2 * 1 + 2
-        out_size = (out_size - 1) * 1 - 2 * 4 + 8
+        out_size = (out_size - 1) * 4 - 2 * 0 + 4
+        out_size = (out_size - 1) * 1 - 2 * 0 + kernel_size
 
-        self.unpool3 = nn.MaxUnpool1d(kernel_size=2, stride=2, padding=1)
+        
+        self.unpool3 = nn.MaxUnpool1d(kernel_size=4, stride=4, padding=0)
         self.d_conv3 = nn.Sequential(
-            nn.ConvTranspose1d(32, self.n_channels_out, kernel_size=8, stride=1, bias=False, padding=4),
+            nn.ConvTranspose1d(conv_kernels, self.n_channels_out, kernel_size=kernel_size, stride=1, bias=False, padding=0),
             nn.BatchNorm1d(self.n_channels_out),
-            nn.ReLU()
+            activation_func
         )
-        out_size = (out_size - 1) * 2 - 2 * 1 + 2
-        out_size = (out_size - 1) * 1 - 2 * 4 + 8
+        out_size = (out_size - 1) * 4 - 2 * 0 + 4
+        out_size = (out_size - 1) * 1 - 2 * 0 + kernel_size
         self.lin2 = nn.Identity()
 
-    def forward(self, x_encoded, indices, pool_sizes):
+    def forward(self, x, indices, pool_sizes):
         indice1, indice2, indice3 = indices
         pool1_size, pool2_size, pool3_size = pool_sizes
-        x = self.d_conv1(self.unpool1(x_encoded, indice3, output_size=pool3_size))
-        x = self.lin1(x)
+
+        if self.num_layers == 3:
+            x = self.d_conv1(self.unpool1(x, indice3, output_size=pool3_size))
+            x = self.lin1(x)
+            x = self.dropout(x)
         x = self.d_conv2(self.unpool2(x, indice2, output_size=pool2_size))
+        x = self.dropout(x)
         x = self.d_conv3(self.unpool3(x, indice1, output_size=pool1_size))
+        x = self.dropout(x)
         x_decoded = self.lin2(x)
         x_decoded = x_decoded.permute(0, 2, 1)
         return x_decoded
 
 
 class CNN_AE(nn.Module):
-    def __init__(self, n_channels, n_classes, embdedded_size=128, n_channels_out=None, input_size: int = 1000, backbone=True):
+    def __init__(self, n_channels, 
+                 n_classes, 
+                 conv_kernels=64, 
+                 kernel_size=8, 
+                 embdedded_size=64, 
+                 n_channels_out=None, 
+                 input_size: int = 1000, 
+                 backbone=True, 
+                 activation="elu",
+                 num_layers=2,
+                 dropout=0.1):
         super(CNN_AE, self).__init__()
         self.input_size = input_size
         self.backbone = backbone
         self.n_channels = n_channels
-        self.embdedded_size = embdedded_size
+        self.embdedded_size = conv_kernels
+        self.num_layers = num_layers
+        self.dropout = dropout
         if n_channels_out is None:
             self.n_channels_out = n_channels
         else:
             self.n_channels_out = n_channels_out
+        
 
-        self.encoder = CNN_AE_encoder(self.n_channels, input_size = input_size, n_classes=n_classes, out_dim=self.embdedded_size, backbone=backbone)
-        self.decoder = CNN_AE_decoder(self.embdedded_size, n_channels_out, input_size = input_size)
+        self.encoder = CNN_AE_encoder(self.n_channels, 
+                                      conv_kernels=conv_kernels, 
+                                      kernel_size=kernel_size, 
+                                      input_size = input_size, 
+                                      n_classes=n_classes, 
+                                      out_dim=self.embdedded_size, 
+                                      backbone=backbone, 
+                                      activation=activation,
+                                      num_layers=self.num_layers,
+                                      dropout=dropout)
+                                      
+        self.decoder = CNN_AE_decoder(self.embdedded_size, 
+                                      n_channels_out, 
+                                      conv_kernels=conv_kernels, 
+                                      kernel_size=kernel_size, 
+                                      input_size = input_size, 
+                                      activation=activation,
+                                      num_layers=self.num_layers,
+                                      dropout=dropout)
 
         self.out_dim = self.encoder.out_dim
         self.output_length = self.encoder.output_length
@@ -486,13 +777,27 @@ class Transformer(nn.Module):
         self.backbone = False
 
 class LSTM_Classifier(nn.Module):
-    def __init__(self, bb_dim, n_classes, hidden_size=128):
+    def __init__(self, bb_dim, n_classes, hidden_size=128, rnn_type="lstm"):
         super(LSTM_Classifier, self).__init__()
         self.n_classes = n_classes
         self.hidden_size = hidden_size
         self.input_length = bb_dim[1]
-        self.lstm = nn.LSTM(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2)
-        self.classifier = nn.Linear(self.hidden_size, self.n_classes)
+        self.rnn_type = rnn_type
+
+        if self.rnn_type == "lstm":
+            self.lstm = nn.LSTM(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2)
+            out_size = self.hidden_size
+        elif self.rnn_type == "lstm_bi":
+            self.lstm = nn.LSTM(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2, bidirectional=True)
+            out_size = self.hidden_size * 2
+        elif self.rnn_type == "gru":
+            self.lstm = nn.GRU(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2)
+            out_size = self.hidden_size
+        elif self.rnn_type == "gru_bi":
+            self.lstm = nn.GRU(input_size=self.input_length, hidden_size=self.hidden_size, num_layers=2, bidirectional=True)
+            out_size = self.hidden_size * 2
+        
+        self.classifier = nn.Linear(out_size, self.n_classes)
 
     def forward(self, x):
         x = x.permute(1, 0, 2)
@@ -584,17 +889,20 @@ class Uncertainty_Wrapper(nn.Module):
             return -torch.sum(probs * torch.log(probs), dim=1)
         elif self.uncertainty_model == 'std':
             bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
-            bins = np.mean([bins[1:], bins[:-1]])
+            bins = np.mean([bins[1:], bins[:-1]], axis=0)
             E_x = torch.sum(probs * bins[None, :], axis=1)
             E_x2 = torch.sum(probs * bins[None, :] ** 2, axis=1)
             return torch.sqrt(E_x2 - E_x**2)
         else:
             raise NotImplementedError
+        
 
     def _compute_expectation(self, probs):
         bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
-        bins = np.mean([bins[1:], bins[:-1]])
-        return torch.sum(probs * bins, axis=1)
+        bin_length = bins[1:] - bins[:-1]
+        bins_mean = np.mean([bins[1:], bins[:-1]], axis=0)
+        
+        return torch.sum(probs * bins_mean * bin_length , axis=1) / bin_length.sum()
         
 class NLE_Wrapper(Uncertainty_Wrapper):
     def __init__(self, base_model, n_classes, return_probs=False, uncertainty_model="variance"):
@@ -605,30 +913,38 @@ class NLE_Wrapper(Uncertainty_Wrapper):
         out, feat = self.base_model(x)
 
         uncertainty = out[1]
-        uncertainty = torch.exp(uncertainty)
+        #computing the std, which is sqrt(2) * s for Laplace distribution
+        uncertainty = torch.exp(uncertainty) * np.sqrt(2) 
         expectation = out[0]
-        probs = self._compute_probs(expectation, uncertainty)
-
+        
         if self.return_probs:
+            probs = self._compute_probs(expectation, uncertainty)
             return expectation, uncertainty, probs
         
         return expectation, uncertainty
     
-    def _compute_probs(self, out, uncertainty):
-        device = out.device
-        out = out.detach().cpu()
+    def _compute_probs(self, expectation, uncertainty):
+        device = expectation.device
+        expectation = expectation.detach().cpu()
         uncertainty = uncertainty.detach().cpu()
-        sigma = torch.sqrt(torch.exp(uncertainty))
 
-        def gaussian_cdf(x, mu, sigma):
-            return 0.5 * (1 + torch.erf((x - mu) / (sigma * np.sqrt(2))))
+        def gaussian_cdf(x, mu, std):
+            sigma = std
+            return 0.5 * (1 + torch.erf((x - mu) / (sigma)))
         
-        def laplace_cdf(x, mu, b):
+        def laplace_cdf(x, mu, std):
+            b = std / np.sqrt(2)
             cdf_values = 0.5 * (1 + np.sign(x - mu) * (1 - np.exp(-np.abs(x - mu) / b)))
             return cdf_values
-
-        cdf_values = laplace_cdf(self.bins, out, sigma)
+        def laplace_pdf(x, mu, std):
+            b = std / np.sqrt(2)
+            return 1 / (2 * b) * np.exp(-np.abs(x - mu) / b)
+        bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
+        #bins_means = np.mean([bins[1:], bins[:-1]], axis=0)
+        cdf_values = laplace_cdf(bins, expectation, uncertainty)
+        #bin_probs = laplace_pdf(bins_means, expectation, sigma)
         bin_probs = cdf_values[:, 1:] - cdf_values[:, :-1]
+        bin_probs = bin_probs / bin_probs.sum(axis=1, keepdims=True)
 
         return bin_probs.to(device)
 

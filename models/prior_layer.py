@@ -33,7 +33,10 @@ class PriorLayer(nn.Module):
         self.is_online = is_online
         self.return_probs = return_probs
         self.uncert = uncert
-        self.bins = nn.Parameter(torch.tensor([self.hr(i) for i in range(0, dim)], dtype=torch.float32), requires_grad=False)
+        bins = np.array([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]])
+        bins = (bins[1:] + bins[:-1])/2
+        self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
+        #self.bins = nn.Parameter(torch.tensor([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]], dtype=torch.float32), requires_grad=False)
 
     def hr(self, i):
         """
@@ -161,7 +164,7 @@ class PriorLayer(nn.Module):
         """
         probs = self._propagate_sumprod(ps)
 
-        E_x = torch.sum(probs * self.bins[None, :], axis=1)
+        E_x = self._compute_expectation(probs)
 
         uncert = self._compute_uncertainty(probs)
 

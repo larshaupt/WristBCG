@@ -8,10 +8,12 @@ from sklearn.metrics import pairwise_distances
 from sklearn.cluster import AgglomerativeClustering
 import scipy
 from scipy.linalg import hankel
+from scipy.signal import butter, sosfiltfilt
 from scipy.optimize import minimize
 from tqdm import tqdm
 import cr.sparse.cvx.focuss as focuss
 
+#%%
 import pandas as pd
 
 def ssa(ts: np.ndarray, L: int, perform_grouping: bool = True, wcorr_threshold: float = 0.3, ret_Wcorr: bool = False):
@@ -46,16 +48,21 @@ def ssa(ts: np.ndarray, L: int, perform_grouping: bool = True, wcorr_threshold: 
             The Wcorrelation matrix.
             Wcorr will only be returned if ret_Wcorr is True
     """
+
+
+
     N = len(ts)
     K = N - L + 1
-
     L_trajectory_matrix = hankel(ts[:L], ts[L-1:]) # (L, K)
-    U, Sigma, V = np.linalg.svd(L_trajectory_matrix) # (L, L); (d, ); (K, K)
+    U, Sigma, V = np.linalg.svd(L_trajectory_matrix, full_matrices=False) # (L, L); (d, ); (K, K)
+
     V = V.T # (K, K)
     d = len(Sigma)
 
+
     deconstructed_ts = []
     for i in range(d):
+
         X_elem = np.array(Sigma[i] * np.outer(U[:,i], V[:,i])) # (L, K)
         X_elem_rev = X_elem[::-1] # (L, K)
         ts_i = np.array([X_elem_rev.diagonal(i).mean() for i in range(-L+1, K)])
@@ -291,24 +298,15 @@ class SpectralPeakTracker:
         return N_cur
 
 class Troika:
-    def __init__(self, window_duration=8, step_duration=2, acc_sampling_freq=125, cutoff_freqs=[0.4, 5]):
+    def __init__(self, window_duration=10, acc_sampling_freq=100, cutoff_freqs=[0.4, 5], n_freq_bins=4096):
         self.window_duration = window_duration
-        self.step_duration = step_duration
         self.sampling_freq = acc_sampling_freq
         self.cutoff_freqs = cutoff_freqs
         self.acc_sampling_freq = acc_sampling_freq
         self.acc_window_len = window_duration * acc_sampling_freq
-        self.acc_step_len = step_duration * acc_sampling_freq
-        self.n_freq_bins = 4096
+        self.n_freq_bins = n_freq_bins
         self.ssr = SSR(self.acc_window_len, self.n_freq_bins, self.acc_sampling_freq)
 
-    def _get_current_window_bounds(self, cur_window: int, n_acc_samples: int):
-        acc_low_bound = (cur_window - 1) * self.acc_step_len
-        acc_high_bound = min(acc_low_bound + self.acc_window_len, n_acc_samples)
-        acc_low_bound = (cur_window - 1) * self.acc_step_len
-        acc_high_bound = min(acc_low_bound + self.acc_window_len, n_acc_samples)
-
-        return (acc_low_bound, acc_high_bound), (acc_low_bound, acc_high_bound)
 
     def _get_dominant_frequencies(self, spectrum: np.ndarray, axis=-1, threshold=.5):
         """
@@ -395,7 +393,7 @@ class Troika:
         spt = SpectralPeakTracker(ppg_sampling_freq=self.sampling_freq, n_freq_bins=self.n_freq_bins, init_freq_bounds=[50, 90])
         #spt = PeakFinder()
 
-        while current_window <= n_windows:
+        while current_window < n_windows:
             
             progress_bar.set_description(f"Calculating window {current_window}/{n_windows}")
 
@@ -403,10 +401,15 @@ class Troika:
             acc_x = acc_window[:,0]
             acc_y = acc_window[:,1]
             acc_z = acc_window[:,2]
-
-            ssa_groups_x, wcorr_x = ssa(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
-            ssa_groups_y, wcorr_y = ssa(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
-            ssa_groups_z, wcorr_z = ssa(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
+            try:
+                ssa_groups_x, wcorr_x = ssa(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
+                ssa_groups_y, wcorr_y = ssa(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
+                ssa_groups_z, wcorr_z = ssa(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
+            except np.linalg.LinAlgError:
+                yield np.nan
+                current_window += 1
+                progress_bar.update()
+                continue
 
 
             acc_reconstructed_x = self._filter_ssa_groups(ssa_groups_x)
@@ -414,8 +417,9 @@ class Troika:
             acc_reconstructed_z = self._filter_ssa_groups(ssa_groups_z)
 
             acc_reconstructed = np.sqrt(acc_reconstructed_x**2 + acc_reconstructed_y**2 + acc_reconstructed_z**2)
-            acc_reconstructed = data_utils.butterworth_bandpass(acc_reconstructed, low=0.5, high=2, fs=100)
-
+            
+            bandpass_filter = butter(4, self.cutoff_freqs, btype='band', fs=self.sampling_freq, output='sos')
+            acc_reconstructed = sosfiltfilt(bandpass_filter, acc_reconstructed)
 
             if current_window == 1:
                 frequencies, sparse_acc_spectrum = self.ssr.transform(acc_reconstructed)
@@ -440,7 +444,7 @@ class Troika:
 
 #%% test troika
     
-
+""" 
 from classical_utils import *
 import config
 import matplotlib.pyplot as plt
@@ -452,7 +456,7 @@ X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = loa
 i = 10000
 acc = X_test[i]
 hr_true = Y_test[i]
-pid = pid_test[i]
+pid = pid_test[i] """
 
 
 
@@ -634,7 +638,7 @@ for i in range(d):
 deconstructed_ts = deconstructed_ts.permute(1, 0, 2)  # (L, d, K) """
 # %%
 
-
+""" 
 troika = Troika(window_duration=10, step_duration=8, acc_sampling_freq=100, cutoff_freqs=[0.4, 5])
 
 # %%
@@ -653,6 +657,4 @@ for hr_true, hr, pid, metric in zip(Y_test, troika.transform(X_test[100:]), pid_
 
 df_results = pd.DataFrame({"y_true": Y_true, "hr_pred": Y_pred, "pid": Pids, "metric": Metrics})
 df_results.to_pickle("troika_results.pkl")
-
-
-# %%
+ """

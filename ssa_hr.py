@@ -25,7 +25,9 @@ def embed_time_series(data, window_size):
 
 # %%
 def decompose_hankel_matrix(hankel):
+    # got numpy.linalg.LinAlgError: SVD did not converge error before
     U, S, Vt = np.linalg.svd(hankel,full_matrices=False)
+
     return U, S, Vt
 
 
@@ -106,12 +108,16 @@ def do_ssa_firstn(time_series, lagged_window_size = 1001, first_n_components = 1
 
     hankel_matrix_x = embed_time_series(window_x-np.mean(window_x), lagged_window_size)
     hankel_matrix_y = embed_time_series(window_y-np.mean(window_y), lagged_window_size)
-    hankel_matrix_z = embed_time_series(window_z-np.mean(window_z), lagged_window_size)
-    Ux, Sx, Vxt = decompose_hankel_matrix(hankel_matrix_x)
-    Uy, Sy, Vyt = decompose_hankel_matrix(hankel_matrix_y)
-    Uz, Sz, Vzt = decompose_hankel_matrix(hankel_matrix_z)
-
     
+    hankel_matrix_z = embed_time_series(window_z-np.mean(window_z), lagged_window_size)
+    
+    try:
+        Ux, Sx, Vxt = decompose_hankel_matrix(hankel_matrix_x)
+        Uy, Sy, Vyt = decompose_hankel_matrix(hankel_matrix_y)
+        Uz, Sz, Vzt = decompose_hankel_matrix(hankel_matrix_z)
+    except np.linalg.LinAlgError:
+        return np.sqrt(window_x**2 + window_y**2 + window_z**2)
+
     # self chosen principal components
     selected_indices = list(range(first_n_components))
     reconstructed_signal_x = reconstruct_time_series(Ux, Sx, Vxt, selected_indices) # here also select primary axis

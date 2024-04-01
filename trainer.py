@@ -103,7 +103,7 @@ def setup_linclf(args, DEVICE, bb_dim):
     '''
 
     if args.backbone in ['CNN_AE'] and args.framework == 'reconstruction':
-        classifier = LSTM_Classifier(bb_dim=bb_dim, n_classes=args.n_class)
+        classifier = LSTM_Classifier(bb_dim=bb_dim, n_classes=args.n_class, rnn_type=args.rnn_type)
     else:
         if args.model_uncertainty == "NLE":
             classifier = Classifier_with_uncertainty(bb_dim=bb_dim, n_classes=args.n_class)
@@ -140,24 +140,91 @@ def setup_model_optm(args, DEVICE):
             NotImplementedError
     else: # no BNN
         if args.backbone == 'FCN':
-            backbone = FCN(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, backbone=True)
+            backbone = FCN(n_channels=args.n_feature, 
+                           n_classes=args.n_class, 
+                           conv_kernels=args.num_kernels, 
+                           kernel_size=args.kernel_size, 
+                           input_size=args.input_length, 
+                           backbone=True)
         elif args.backbone == 'DCL':
-            backbone = DeepConvLSTM(n_channels=args.n_feature, n_classes=args.n_class, input_size=args.input_length, conv_kernels=64, kernel_size=5, LSTM_units=args.lstm_units, backbone=True)
+            backbone = DeepConvLSTM(n_channels=args.n_feature, 
+                                    n_classes=args.n_class, 
+                                    conv_kernels=args.num_kernels, 
+                                    kernel_size=args.kernel_size, 
+                                    input_size=args.input_length, 
+                                    LSTM_units=args.lstm_units, 
+                                    rnn_type = args.rnn_type, 
+                                    backbone=True)
         elif args.backbone == 'LSTM':
-            backbone = LSTM(n_channels=args.n_feature, n_classes=args.n_class, LSTM_units=args.lstm_units, backbone=True)
+            backbone = LSTM(n_channels=args.n_feature, 
+                            n_classes=args.n_class, 
+                            LSTM_units=args.lstm_units, 
+                            rnn_type = args.rnn_type, 
+                            backbone=True)
         elif args.backbone == 'AE':
-            backbone = AE(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, embdedded_size=128, backbone=True, n_channels_out=args.n_channels_out)
+            backbone = AE(n_channels=args.n_feature, 
+                          input_size=args.input_length, 
+                          n_classes=args.n_class, 
+                          embdedded_size=128, 
+                          backbone=True, 
+                          n_channels_out=args.n_channels_out)
         elif args.backbone == 'CNN_AE':
-            backbone = CNN_AE(n_channels=args.n_feature, n_classes=args.n_class, embdedded_size=128, input_size=args.input_length, backbone=True, n_channels_out=args.n_channels_out)
+            backbone = CNN_AE(n_channels=args.n_feature, 
+                              n_classes=args.n_class, 
+                              embdedded_size=128, 
+                              input_size=args.input_length, 
+                              backbone=True, 
+                              n_channels_out=args.n_channels_out, 
+                              dropout=0.0, 
+                              num_layers=2, 
+                              kernel_size=args.kernel_size,
+                              conv_kernels=args.num_kernels)
         elif args.backbone == 'Transformer':
-            backbone = Transformer(n_channels=args.n_feature, input_size=args.input_length, n_classes=args.n_class, dim=128, depth=4, heads=4, mlp_dim=64, dropout=0.1, backbone=True)
+            backbone = Transformer(n_channels=args.n_feature, 
+                                   input_size=args.input_length, 
+                                   n_classes=args.n_class, 
+                                   dim=128, 
+                                   depth=4, 
+                                   heads=4, 
+                                   mlp_dim=64, 
+                                   dropout=0.1, 
+                                   backbone=True)
         elif args.backbone == "CorNET":
             if args.add_frequency:
-                backbone = CorNETFrequency(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length, num_extra_features=args.n_feature)
+                backbone = CorNETFrequency(n_channels=args.n_feature, 
+                                           n_classes=args.n_class, 
+                                           conv_kernels=args.num_kernels, 
+                                           kernel_size=args.kernel_size, 
+                                           LSTM_units=args.lstm_units,
+                                           backbone=True, 
+                                           input_size=args.input_length, 
+                                           num_extra_features=args.n_feature)
             else:
-                backbone = CorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length, rnn_type=args.rnn_type)
+                backbone = CorNET(n_channels=args.n_feature, 
+                                  n_classes=args.n_class, 
+                                  conv_kernels=args.num_kernels, 
+                                  kernel_size=args.kernel_size, 
+                                  LSTM_units=args.lstm_units, 
+                                  backbone=True, 
+                                  input_size=args.input_length, 
+                                  rnn_type=args.rnn_type)
+        elif args.backbone == "AttentionCorNET":
+            backbone = AttentionCorNET(n_channels=args.n_feature, 
+                                       n_classes=args.n_class, 
+                                       conv_kernels=args.num_kernels, 
+                                       kernel_size=args.kernel_size, 
+                                       LSTM_units=args.lstm_units, 
+                                       backbone=True, 
+                                       input_size=args.input_length, 
+                                       rnn_type=args.rnn_type)
         elif args.backbone == "TCN":
-            backbone = TemporalConvNet(num_channels=[32, 64, 128], n_classes=args.n_class,  num_inputs=args.n_feature, input_length = args.input_length, kernel_size=16, dropout=0.2, backbone=True)
+            backbone = TemporalConvNet(num_channels=[32, 64, 128], 
+                                       n_classes=args.n_class,  
+                                       num_inputs=args.n_feature,
+                                       input_length = args.input_length, 
+                                       kernel_size=16, 
+                                       dropout=0.2, 
+                                       backbone=True)
         else:
             NotImplementedError
 
@@ -238,9 +305,12 @@ def setup_args(args):
     else:
         assert args.loss == 'CrossEntropy'
 
-    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall", "max_v2"]:
+    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall", "max_v2", "max_hrv"]:
         args.n_feature = 3
     
+    if args.backbone == "Transformer":
+        args.pretrain_batch_size = 128
+        args.batch_size = 128
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -269,7 +339,7 @@ def setup_args(args):
     if args.framework == 'reconstruction':
         args.criterion = 'MSE'
         args.n_channels_out = 1
-        assert args.backbone in ['AE', 'CNN_AE', "CorNET", "LSTM", "Transformer"]
+        assert args.backbone in ['AE', 'CNN_AE', "CorNET", "LSTM", "Transformer", "Attention_CNN_AE"]
 
     model_name_opt = ""
     model_name_opt += f"_pretrain_subsample_{args.pretrain_subsample:.3f}"  if args.pretrain_subsample != 1 else ""
@@ -294,7 +364,9 @@ def setup_args(args):
     lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty != "none" else ""
     lincl_model_name_opt += f"_trainranked_{args.subsample_ranked_train}" if args.subsample_ranked_train not in [None, 0.0] else ""
     lincl_model_name_opt += f"_subsample_{args.subsample:.3f}" if args.subsample != 1 else ""
+    lincl_model_name_opt += f"_timesplit" if args.split_by == "time" else ""
     lincl_model_name_opt += f"_disc_hr_{args.n_class}" if args.discretize_hr else ""
+    lincl_model_name_opt += f"_hrsmoothing_{args.hr_smoothing}" if args.hr_smoothing > 1 else ""
     lincl_model_name_opt += f"_lr_{args.lr_finetune_backbone:.1E}" if args.lr_finetune_backbone != args.lr else ""
     lincl_model_name_opt += f"_lr_lstm_{args.lr_finetune_lstm:.1E}" if args.lr_finetune_lstm != args.lr_finetune_backbone else ""
     lincl_model_name_opt += f"_hrmin_{args.hr_min}" if args.hr_min != 50 else ""
@@ -671,7 +743,7 @@ def convert_to_hr(values, args):
         values = values.cpu().numpy()
 
 
-    if values.ndim > 1 and values.shape[1] > 1:
+    if values.ndim > 1 and values.shape[1] > 1: # if we have more than one class
 
         # construct the bins
         bins = np.linspace(0, 1, args.n_prob_class-1)
@@ -686,7 +758,7 @@ def convert_to_hr(values, args):
 
 def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, optimizer, criterion, args):
     best_model = None
-    min_val_corr = 0
+    min_val_corr = -1
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.n_epoch, eta_min=0)
 
@@ -764,11 +836,10 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                     })
                 
                 #wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
-                figure = plot_true_pred(hr_true, hr_pred)
-                wandb.log({"true_pred_val": figure}, step=epoch)
+                #figure = plot_true_pred(hr_true, hr_pred, x_lim=[args.hr_min, args.hr_max], y_lim=[args.hr_min, args.hr_max])
+                #wandb.log({"true_pred_val": figure}, step=epoch)
                 logger.debug(f'Val Loss     : {val_loss:.4f}, Val MAE     : {mae_val:.4f}, Val Corr     : {corr_val:.4f}\n')
                 wandb.log({'Val_Loss': val_loss, 'Val_MAE': mae_val, 'Val_Corr': corr_val}, step=epoch)
-
                 if corr_val >= min_val_corr:
                     min_val_corr = corr_val
                     best_model = copy.deepcopy(trained_backbone.state_dict())
@@ -812,7 +883,7 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
                     }) 
         hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
         
-        figure = plot_true_pred(hr_true, hr_pred)
+        figure = plot_true_pred(hr_true, hr_pred, x_lim=[args.hr_min, args.hr_max], y_lim=[args.hr_min, args.hr_max])
         wandb.log({"true_pred_test": figure})
         
         mae_test = np.abs(hr_true - hr_pred).mean()
@@ -876,7 +947,7 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
 
             hr_true, hr_pred, hr_pred_viterbi, hr_pred_sumprod = np.array(hr_true), np.array(hr_pred), np.array(hr_pred_viterbi), np.array(hr_pred_sumprod)
             
-            figure = plot_true_pred(hr_true, hr_pred)
+            figure = plot_true_pred(hr_true, hr_pred, x_lim=[args.hr_min, args.hr_max], y_lim=[args.hr_min, args.hr_max])
             wandb.log({f"true_pred_{prefix}_post": figure})
             
             mae_test = np.abs(hr_true - hr_pred).mean()

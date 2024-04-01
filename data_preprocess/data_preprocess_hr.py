@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import sys
 import os
+import pdb
 from scipy.interpolate import interp1d
 import torch
 import pickle as cp
@@ -202,22 +203,25 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
 
         with open(path, 'rb') as f:
             data = cp.load(f)
-        return data
+
+        if len(data) == 3:
+            x_, y_, pid_ = data
+            metrics_ = np.array([])
+        elif len(data) == 4:
+            x_, y_, pid_, metrics_ = data
+        elif len(data) == 2:
+            x_, pid_ = data
+            y_ = np.array([])
+            metrics_ = np.array([])
+        else:
+            raise ValueError(f"Invalid data shape {len(data)}")
+        
+        return x_, y_, pid_, metrics_
     
     def load_split(files, path):
         x, y, pid, mectrics = [], [], [], []
         for file in files:
-            data_ = load_pickle(os.path.join(path, file))
-
-            if len(data_) == 3:
-                x_, y_, pid_ = data_
-                metrics_ = np.array([])
-            elif len(data_) == 4:
-                x_, y_, pid_, metrics_ = data_
-            elif len(data_) == 2:
-                x_, pid_ = data_
-                y_ = np.array([])
-                metrics_ = np.array([])
+            x_, y_, pid_, metrics_ = load_pickle(os.path.join(path, file))
 
             if len(x_) != 0:
                 x.append(x_)
@@ -233,7 +237,45 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
         pid = np.concatenate(pid)
         mectrics = np.concatenate(mectrics)
 
-        return x,y,pid, mectrics
+        return x, y, pid, mectrics
+    
+    def load_split_by_time(files, path):
+        # Load data and split by time
+
+        x, y, pid, mectrics = [], [], [], []
+        for filename, times in files.items():
+            x_, y_, pid_, metrics_ = load_pickle(os.path.join(path, filename))
+
+            if len(x_) == 0:
+                continue
+
+            timestamps = [el[1] for el in pid_]
+            times = np.array(times).reshape(-1,2)
+
+            for (start_time, end_time) in times:
+                start_index = np.searchsorted(timestamps, start_time)
+                end_index = np.searchsorted(timestamps, end_time)
+                x_ = x_[start_index:end_index]
+                y_ = y_[start_index:end_index]
+                pid_ = pid_[start_index:end_index]
+                metrics_ = metrics_[start_index:end_index]
+
+                if len(x_) == 0:
+                    continue
+
+                x.append(x_)
+                y.append(y_)
+                pid.append(pid_)
+                mectrics.append(metrics_)
+
+        if len(x) == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([])        
+        x = np.concatenate(x)
+        y = np.concatenate(y)
+        pid = np.concatenate(pid)
+        mectrics = np.concatenate(mectrics)
+
+        return x, y, pid, mectrics
     
     def load_reconstruction_signal(files, path):
         # Load reconstruction signal for autoencoder training
@@ -273,25 +315,53 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
 
         data = [d[mask] for d in data]
         return data
-    
 
-    split_path = os.path.join(data_path, "splits.json")
-    with open(split_path, 'r') as f:
-        splits = json.load(f)
-    split_files = splits[str(split)]
+    if args.split_by == "time": 
+        # includes all subjects in all splits
+        # takes the last 20% for testing
+        # and the rest for training, with a 5-fold cross validation scheme
+        split_path = os.path.join(data_path, "splits_by_time.json")
+        with open(split_path, 'r') as f:
+            splits = json.load(f)
+        split_files = splits[str(split)]
 
-    train = split_files["train"]
-    test = split_files["test"]
-    val = split_files["val"]
+        train_split = split_files["train"]
+        val_split = split_files["val"]
+        test_split = split_files["test"]
 
-    x_train, y_train, d_train, metrics_train = load_split(train, data_path)
-    x_val, y_val, d_val, metrics_val = load_split(val, data_path)
-    x_test, y_test, d_test, metrics_test = load_split(test, data_path)
+        x_train, y_train, d_train, metrics_train = load_split_by_time(train_split, data_path)
+        x_val, y_val, d_val, metrics_val = load_split_by_time(val_split, data_path)
+        x_test, y_test, d_test, metrics_test = load_split_by_time(test_split, data_path)
+
+
+    else: #args.split_by == "subject"
+        split_path = os.path.join(data_path, "splits.json")
+        with open(split_path, 'r') as f:
+            splits = json.load(f)
+        split_files = splits[str(split)]
+
+        train_split = split_files["train"]
+        val_split = split_files["val"]
+        test_split = split_files["test"]
+
+        x_train, y_train, d_train, metrics_train = load_split(train_split, data_path)
+        x_val, y_val, d_val, metrics_val = load_split(val_split, data_path)
+        x_test, y_test, d_test, metrics_test = load_split(test_split, data_path)
 
     if reconstruction:
-        y_train = load_reconstruction_signal(train, data_path)
-        y_val = load_reconstruction_signal(val, data_path)
-        y_test = load_reconstruction_signal(test, data_path)
+        y_train = load_reconstruction_signal(train_split, data_path)
+        y_val = load_reconstruction_signal(val_split, data_path)
+        y_test = load_reconstruction_signal(test_split, data_path)
+
+    elif args.hr_smoothing > 1:
+
+        def hr_smoother(hr, window_size=3):
+            hr = pd.Series(hr).rolling(window=window_size, center = True, min_periods=0).mean().to_numpy()
+            return hr
+
+        y_train = hr_smoother(y_train, args.hr_smoothing)
+        y_val = hr_smoother(y_val, args.hr_smoothing)
+        y_test = hr_smoother(y_test, args.hr_smoothing)
 
     if take_every_nth_train != 1:
         x_train = x_train[::take_every_nth_train]
@@ -447,6 +517,14 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
         
+    elif dataset == 'max_hrv':
+        sampling_rate = 100
+        if args.step_size == 15 and args.window_size == 60:
+            data_path = config.data_dir_Max_processed_hrv
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
+        
 
     elif dataset == 'apple':
         sampling_rate = 50
@@ -577,6 +655,13 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         y_train = norm_hr(y_train, args.hr_min, args.hr_max)
         y_val = norm_hr(y_val, args.hr_min, args.hr_max)
         y_test = norm_hr(y_test, args.hr_min, args.hr_max)
+    else:
+        # normalize ecg
+        ecg_min = -1
+        ecg_max = 6
+        y_train = (y_train - ecg_min) / (ecg_max - ecg_min)
+        y_val = (y_val - ecg_min) / (ecg_max - ecg_min)
+        y_test = (y_test - ecg_min) / (ecg_max - ecg_min)
 
     if discrete_hr and not reconstruction:
         sigma = args.label_sigma if sigma is None else sigma

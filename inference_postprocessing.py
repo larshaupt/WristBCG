@@ -145,7 +145,7 @@ with torch.no_grad():
         Y_prob.append(y)
         D.append(d)
         P_prob.append(p)
-        P_uncert.append(p_uncert)
+        P_uncert.append(p_uncert * (args.hr_max - args.hr_min))
         P.append(convert_to_hr(exp, args))
 
 
@@ -178,38 +178,7 @@ print(f"RMSE: {rmse}")
 print(f"ECE: {ece}")
 
 
-#%%
 
-def confidence_plot(uncert, pred_expectation, y, ax=None, name="", distribution="gaussian"):
-
-    if ax is None:
-        fig, ax = plt.subplots(1,1, figsize=(10,5))
-
-
-    def gaussian_confidence_interval(conf, uncert):
-        return np.abs(norm.ppf(conf, loc=0, scale=uncert))
-
-    def laplace_confidence_interval(conf, uncert):
-        return - uncert * np.log(conf)
-    if distribution == "gaussian":
-        conf_function = gaussian_confidence_interval
-    elif distribution == "laplace":
-        conf_function = laplace_confidence_interval
-
-    conf_scores = []
-    for conf in np.linspace(0, 1, 11):
-        conf_interval = conf_function(uncert, conf).reshape(-1)
-        inside_confidence_interval = (Y > pred_expectation - conf_interval) & (Y < pred_expectation + conf_interval)
-        conf_score = inside_confidence_interval.sum() / len(inside_confidence_interval)
-        conf_scores.append((conf, conf_score))
-    df_conf_scores = pandas.DataFrame(conf_scores, columns=["Confidence", "Score"])
-    df_conf_scores["Confidence"] = df_conf_scores["Confidence"].round(1)
-    df_conf_scores.plot.bar(x="Confidence", y="Score", ax=ax, label=name)
-    ax.set_xlabel("Confidence")
-    ax.set_ylabel("Percentage of data inside confidence interval")
-    ax.set_title("Confidence Calibration")
-    ax.set_ylim(0,1)
-    ax.plot(np.arange(0,1.1,0.1), color="red")
 #%%
 
 df_res = pandas.DataFrame({"Y": Y_concat, 
@@ -328,10 +297,48 @@ print(f"ECE: {ece}")
 
 
 # %%
+def confidence_plot(uncert, pred_expectation, Y, ax=None, name="", distribution="gaussian", num_points = 10):
+    
+    if ax is None:
+        fig, ax = plt.subplots(1,1, figsize=(8,5))
 
+
+    def gaussian_confidence_interval(conf, uncert):
+        return norm.ppf(0.5 + conf/2, loc=0, scale=uncert)
+
+    def laplace_confidence_interval(conf, uncert):
+        return - uncert/np.sqrt(2) * np.log(1-conf)
+    if distribution == "gaussian":
+        conf_function = gaussian_confidence_interval
+    elif distribution == "laplace":
+        conf_function = laplace_confidence_interval
+    else:
+        raise ValueError(f"Distribution {distribution} not supported")
+
+    conf_scores = []
+    for conf in np.linspace(0, 1, num_points + 1):
+        conf_interval = conf_function(conf, uncert).reshape(-1)
+        inside_confidence_interval = (Y > pred_expectation - conf_interval) & (Y < pred_expectation + conf_interval)
+        conf_score = inside_confidence_interval.sum() / len(inside_confidence_interval)
+        conf_scores.append((conf, conf_score))
+    df_conf_scores = pandas.DataFrame(conf_scores, columns=["Confidence", "Score"])
+    ece = (df_conf_scores["Confidence"] - df_conf_scores["Score"]).abs().mean()
+    
+    df_conf_scores["Confidence"] = df_conf_scores["Confidence"].round(1)
+    df_conf_scores.plot.bar(x="Confidence", y="Score", ax=ax, label=name)
+    ax.set_xlabel("Confidence")
+    ax.set_ylabel("Percentage of data inside confidence interval")
+    ax.set_title("Confidence Calibration")
+    ax.set_ylim(0,1)
+    ax.plot(np.arange(0,1.1,1/num_points), color="red")
+    return ece
+
+confidence_plot(uncerts, preds, Y_concat, distribution="gaussian", name="Raw Prediction", num_points=10)
+#%%
 
 def plot_excluion(HR_true, HR_pred, uncertainty, ax=None, metric="MAE", name=""):
 
+    
     if ax is None:
         fig, ax = plt.subplots(1,1, figsize=(10,5))
 
@@ -416,12 +423,28 @@ def plot_hit_rate(HR_true, HR_pred_probs, ax=None,  name="", hrmin=50, hrmax = 1
     groups.plot.bar()
     plt.plot(np.arange(0.05,1.0,0.1), color="red")
     plt.ylim(0,1)
-    plt.xlabel("Probability")
-    plt.ylabel("Hit Rate")
+    plt.xlabel("Confidence")
+    plt.ylabel("Accuracy")
     plt.title("Confidence Calibration (8 bins)")
 
 plot_hit_rate(Y_concat, probs, name="Raw Prediction", hrmin = args.hr_min, hrmax = args.hr_max)
 
 
 
+#%%
 
+def plot_hr(HR_true, HR_pred, uncert = None, HR_pred_raw = None, ax = None, title = ""):
+    if ax is None:
+        fig, ax = plt.subplots(1,1, figsize=(10,5))
+    ax.plot(HR_true, label="True HR")
+    ax.plot(HR_pred, label="Pred HR")
+    if uncert is not None:
+        ax.fill_between(np.arange(len(HR_true)), HR_pred-uncert, HR_pred+uncert, alpha=0.3, label="Uncertainty")
+    if HR_pred_raw is not None:
+        ax.plot(HR_pred_raw, label="Raw Pred HR", alpha=0.5)
+    ax.set_title(title)
+    ax.legend()
+
+#plot_hr(Y_concat, preds, uncerts, HR_pred_raw=P_concat, title="HR Prediction")
+plot_hr(Y_concat, preds, uncerts, title="HR Prediction")
+# %%
