@@ -64,7 +64,7 @@ def get_parser():
     parser.add_argument('--bandpass_freq_min', type=float, default=0.1, help='minimum frequency for bandpass filter')
     parser.add_argument('--bandpass_freq_max', type=float, default=18, help='maximum frequency for bandpass filter')
     parser.add_argument('--hr_smoothing', type=int, default=1, help='smoothing of heart rate, window size')
-    
+    parser.add_argument('--dropout_rate', type=float, default=0.1, help='dropout rate')
     # augmentation
     parser.add_argument('--aug1', type=str, default='jit_scal',
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
@@ -75,10 +75,10 @@ def get_parser():
 
     # framework
     parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction'], help='name of framework')
-    parser.add_argument('--backbone', type=str, default='AttentionCorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET'], help='name of backbone network')
-    parser.add_argument('--num_kernels', type=int, default=16, help='number of kernels in CNN')
+    parser.add_argument('--backbone', type=str, default='AttentionCorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', 'HRCTPNet'], help='name of backbone network')
+    parser.add_argument('--num_kernels', type=int, default=32, help='number of kernels in CNN')
     parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
-    parser.add_argument('--lstm_units', type=int, default=192, help='number of units in LSTM')
+    parser.add_argument('--lstm_units', type=int, default=128, help='number of units in LSTM')
     parser.add_argument('--rnn_type', type=str, default="gru", choices=["lstm", "lstm_bi", "gru", "gru_bi"], help='direction of LSTM')
     parser.add_argument('--criterion', type=str, default='cos_sim', choices=['cos_sim', 'NTXent', 'MSE', 'MAE'],
                         help='type of loss function for contrastive learning')

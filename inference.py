@@ -157,7 +157,8 @@ for split in [0]:
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_windowsize_60_stepsize_15_gru/lincls_hrmin_0.0_hrmax_0.25_CorNET_dataset_max_hrv_split{split}_eps60_bs512_config.json"
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_timesplit_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json"
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_timesplit_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
-    json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_CNN_AE_pretrain_max_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CNN_AE_dataset_max_v2_split4_eps60_bs512_config.json"
+    #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_CNN_AE_pretrain_max_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CNN_AE_dataset_max_v2_split4_eps60_bs512_config.json"
+    json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_AttentionCorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_timesplit_hrmin_30_hrmax_120_AttentionCorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
 
     #_X, _Y, _D, _P = predict_from_json(json_file, mode="finetune", split_partition = "val")
     #X.append(_X)
@@ -182,11 +183,14 @@ split_partition = "test"
 extra_args = {}
 #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_CNN_AE_pretrain_max_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CNN_AE_dataset_max_v2_split{split}_eps60_bs512_config.json"
 json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
-
+json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
 with open(json_file) as json_file:
         json_args = json.load(json_file)
 
+if "rnn_type" not in json_args.keys():
+    json_args["rnn_type"] = "lstm"
 
+# %%
 
 parser = get_parser()
 args = parser.parse_args([])
@@ -213,7 +217,8 @@ args.data_thr_hr = 0
 args.data_thr_max = 100
 args.data_thr_angle = 100
 args.data_thr_avg = 100
-args.dataset="apple100"
+args.dataset = "appleall"
+
 
 # Testing
 #######################
@@ -272,7 +277,7 @@ if mode == "finetuning":
 elif mode == "pretraining":
     model_weights = model_weights_dict["model_state_dict"]
 
-model_test.load_state_dict(model_weights, strict=True)
+model_test.load_state_dict(model_weights, strict=False)
 model_test = model_test.to(DEVICE)
 #%%
 

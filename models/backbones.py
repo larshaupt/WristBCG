@@ -10,6 +10,7 @@ import numpy as np
 #%%
 from .attention import *
 from .MMB import *
+from .HRCTPNet import HRCTPNet
 
 #%%
 class FCN(nn.Module):
@@ -73,7 +74,16 @@ class FCN(nn.Module):
 #%%
 class CorNET(nn.Module):
     # from Biswas et. al: CorNET: Deep Learning Framework for PPG-Based Heart Rate Estimation and Biometric Identification in Ambulant Environment
-    def __init__(self, n_channels, n_classes, conv_kernels=32, kernel_size=40, LSTM_units=128, input_size:int=500, backbone=True, rnn_type="lstm"):
+    def __init__(self, 
+                 n_channels, 
+                 n_classes, 
+                 conv_kernels=32, 
+                 kernel_size=40, 
+                 LSTM_units=128, 
+                 input_size:int=500, 
+                 backbone=True, 
+                 rnn_type="lstm",
+                 dropout_rate=0.1):
         super(CorNET, self).__init__()
         # vector size after a convolutional layer is given by:
         # (input_size - kernel_size + 2 * padding) / stride + 1
@@ -81,7 +91,7 @@ class CorNET(nn.Module):
         self.activation = nn.ELU()
         self.backbone = backbone
         self.n_classes = n_classes
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(dropout_rate)
         self.conv1 = nn.Sequential(nn.Conv1d(n_channels, conv_kernels, kernel_size=kernel_size, stride=1, bias=False, padding=0),
                                          nn.BatchNorm1d(conv_kernels),
                                          self.activation

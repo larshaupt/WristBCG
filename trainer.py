@@ -207,7 +207,8 @@ def setup_model_optm(args, DEVICE):
                                   LSTM_units=args.lstm_units, 
                                   backbone=True, 
                                   input_size=args.input_length, 
-                                  rnn_type=args.rnn_type)
+                                  rnn_type=args.rnn_type,
+                                  dropout_rate=args.dropout_rate)
         elif args.backbone == "AttentionCorNET":
             backbone = AttentionCorNET(n_channels=args.n_feature, 
                                        n_classes=args.n_class, 
@@ -225,6 +226,10 @@ def setup_model_optm(args, DEVICE):
                                        kernel_size=16, 
                                        dropout=0.2, 
                                        backbone=True)
+        elif args.backbone == "HRCTPNet":
+            backbone = HRCTPNet(num_channels=args.n_feature, 
+                                num_classes=args.n_class,
+                                backbone=True,)
         else:
             NotImplementedError
 
@@ -309,8 +314,9 @@ def setup_args(args):
         args.n_feature = 3
     
     if args.backbone == "Transformer":
-        args.pretrain_batch_size = 128
-        args.batch_size = 128
+        # limit batch size to 128 for transformer, otherwise it will run out of memory
+        args.pretrain_batch_size = min(args.pretrain_batch_size, 128)
+        args.batch_size = min(args.batch_size, 128)
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -339,7 +345,7 @@ def setup_args(args):
     if args.framework == 'reconstruction':
         args.criterion = 'MSE'
         args.n_channels_out = 1
-        assert args.backbone in ['AE', 'CNN_AE', "CorNET", "LSTM", "Transformer", "Attention_CNN_AE"]
+        assert args.backbone in ['AE', 'CNN_AE', "CorNET", "LSTM", "Transformer", "Attention_CNN_AE", "HRCTPNet"]
 
     model_name_opt = ""
     model_name_opt += f"_pretrain_subsample_{args.pretrain_subsample:.3f}"  if args.pretrain_subsample != 1 else ""

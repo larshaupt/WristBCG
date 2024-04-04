@@ -52,14 +52,20 @@ def run_classical(config_dict):
         print(f"Config: {config_dict}")
         if config_dict["framework"] == 'Bioglass':
             compute_hr = compute_hr_bioglass
+        if config_dict["framework"] == 'Bioglass_original':
+            compute_hr = compute_hr_bioglass_original
         elif config_dict["framework"] == 'SSA':
             compute_hr = compute_hr_ssa
+        elif config_dict["framework"] == 'SSA_original':
+            compute_hr = compute_hr_ssa_original
         elif config_dict["framework"] == 'Troika':
             compute_hr = compute_hr_troika
         elif config_dict["framework"] == 'Troika_w_tracking':
             compute_hr = compute_hr_troika_w_tracking
         elif config_dict["framework"] == 'Kantelhardt':
             compute_hr = compute_hr_kantelhardt
+        elif config_dict["framework"] == 'Kantelhardt_original':
+            compute_hr = compute_hr_kantelhardt_original
         else:
             raise NotImplementedError
 
@@ -89,6 +95,9 @@ def run_classical(config_dict):
         results_df_val.to_pickle(predictions_path_val)
         print(f"Saves results to {predictions_path_val}")
 
+        figure = plot_true_pred(results_df_val["hr_true"], results_df_val["hr_pred"])
+        wandb.log({"true_pred_val": figure})
+
         if not isinstance(results_df_test, pd.DataFrame):
 
             if config_dict["framework"] == 'Troika_w_tracking':
@@ -113,6 +122,10 @@ def run_classical(config_dict):
         wandb.log({"Test_Corr": corr_test, "Test_MAE": mae_test})
         print(f"Saves results to {predictions_path_test}")
         results_df_test.to_pickle(predictions_path_test)
+
+        figure = plot_true_pred(results_df_test["hr_true"], results_df_test["hr_pred"])
+        wandb.log({"true_pred_test": figure})
+
         # Finish the run
         wandb.finish() 
 

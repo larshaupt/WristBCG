@@ -12,6 +12,7 @@ import scipy
 from scipy.signal import butter, sosfiltfilt, hilbert, correlate
 import TROIKA_bcg
 import data_utils
+import matplotlib.pyplot as plt
 
 def load_subjects(dataset_dir, subject_paths):
     X, Y, pid, metrics = [], [], [], []
@@ -61,8 +62,6 @@ def load_dataset(dataset_dir, split, load_train=False):
         return X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
 
 def compute_hr_bioglass(X, fs = None, **kwargs):
-    
-
 
     if hasattr(X, "fs"):
         fs = X.fs
@@ -73,16 +72,28 @@ def compute_hr_bioglass(X, fs = None, **kwargs):
     if not isinstance (X, pd.DataFrame):
         X = pd.DataFrame(X, columns=["acc_x", "acc_y", "acc_z"])
     
-    df_snip_processed = data_utils.full_a_processing(X, fs)
+    df_snip_processed = data_utils.full_a_processing(X, fs, cutoff_frequencies=(0.5, 2))
     filtered_signal = df_snip_processed["mag_filtered"]
 
-    #filtered_signal = hp.scale_data(filtered_signal)
-    #filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
-    #filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
-    #ecg = hp.enhance_ecg_peaks(hp.scale_data(ecg), fs, aggregation='median', iterations=5)
-
-    hr_rr = extract_hr_peaks(filtered_signal, fs)
+    hr_rr = extract_hr_peaks(filtered_signal, fs, method="cwt")
     return hr_rr
+
+def compute_hr_bioglass_original(X, fs = None, **kwargs):
+
+    if hasattr(X, "fs"):
+        fs = X.fs
+    else:
+        if fs is None:
+            raise ValueError("fs is not defined")
+
+    if not isinstance (X, pd.DataFrame):
+        X = pd.DataFrame(X, columns=["acc_x", "acc_y", "acc_z"])
+    
+    df_snip_processed = data_utils.full_a_processing(X, fs, cutoff_frequencies=(0.75, 2.5))
+    filtered_signal = df_snip_processed["mag_filtered"]
+
+    hr = extract_hr_spectrum(filtered_signal, fs, cutoff_frequencies=(0.75, 2.5))
+    return hr
 
 
 def compute_hr_ssa(X, fs = None, lagged_window_size = 501, first_n_components=20, **kwargs):
@@ -98,24 +109,54 @@ def compute_hr_ssa(X, fs = None, lagged_window_size = 501, first_n_components=20
     filtered_signal = ssa_hr.do_ssa_firstn(X, lagged_window_size=lagged_window_size, first_n_components=first_n_components)
     filtered_signal = data_utils.butterworth_bandpass(filtered_signal, fs, 0.5, 2)
 
-    #filtered_signal = hp.scale_data(filtered_signal)
-    #filtered_signal = hp.remove_baseline_wander(filtered_signal, fs)
-    #filtered_signal = hp.filter_signal(filtered_signal, 0.05, fs, filtertype='notch')
-    #filtered_signal = hp.enhance_ecg_peaks(filtered_signal, fs, aggregation='median', iterations=5)
     hr_rr = extract_hr_peaks(filtered_signal, fs)
 
     return hr_rr
 
+def compute_hr_ssa_original(X, fs = None, lagged_window_size = 501, **kwargs):
+    if hasattr(X, "fs"):
+        fs = X.fs
+    else:
+        if fs is None:
+            raise ValueError("fs is not defined")
 
-def extract_hr_peaks(signal, fs):
-    peaks = find_peaks_cwt(signal, np.arange(5,80))
-    #peaks = find_peaks(signal, distance=0.5*fs, prominence=0.3 * np.quantile(signal, 0.9))[0]
+    if not isinstance(X, np.ndarray): 
+        X = X.to_numpy()
+    
+    filtered_signal = ssa_hr.do_ssa_axis(X, lagged_window_size=lagged_window_size)
+    filtered_signal = data_utils.butterworth_bandpass(filtered_signal, fs, 0.5, 2)
+
+    hr_rr = extract_hr_peaks(filtered_signal, fs, method="classical")
+
+    return hr_rr
+
+
+def extract_hr_peaks(signal, fs, method="cwt"):
+    if method == "cwt":
+        peaks = find_peaks_cwt(signal, np.arange(5,80))
+    elif method == "classical":
+        peaks = find_peaks(signal, distance=0.5*fs, prominence=0.3 * np.quantile(signal, 0.9))[0]
+    else:
+        raise ValueError("Method not implemented")
     rr = np.diff(peaks)
     rr = rr[(rr > 0.5*fs) & (rr < 1.5*fs)]
     if len(rr) < 2:
         return np.nan
     hr = 60*fs/np.mean(rr)
     return hr
+
+def extract_hr_spectrum(signal, fs, cutoff_frequencies=(0.5, 2)):
+    fft = np.fft.fft(signal)
+    freqs = np.fft.fftfreq(len(signal), 1/fs)
+
+    hr_frequenies = (freqs > cutoff_frequencies[0]) & (freqs < cutoff_frequencies[1])
+    hr_periodogram = np.abs(fft[hr_frequenies])**2
+    max_frequency = freqs[np.argmax(hr_periodogram)]
+    hr = 60*max_frequency
+    return hr
+
+
+
 
 
 def single_channel_butterworth_bandpass(signal, fs, low, high, order=4):
@@ -230,7 +271,7 @@ def compute_hr_troika(X, fs=100, n_freq=4096, f_low=0.5, f_high=4, **kwargs):
 
 #%%
 
-def compute_hr_kantelhardt(X, fs=100, peak_detection = "classical", **kwargs): 
+def compute_hr_kantelhardt(X, fs=100, peak_detection = "cwt", **kwargs): 
 
     X = data_utils.butterworth_bandpass(X, low=5, high=14, fs=fs)
     X = np.apply_along_axis(lambda x: np.abs(hilbert(x)), 0, X)
@@ -258,4 +299,47 @@ def compute_hr_kantelhardt(X, fs=100, peak_detection = "classical", **kwargs):
     hr = hr_canditates[selected_axis]
     return hr
 
-# %%
+
+def compute_hr_kantelhardt_original(X, fs=100, **kwargs): 
+
+    X = data_utils.butterworth_bandpass(X, low=5, high=14, fs=fs)
+    X = np.apply_along_axis(lambda x: np.abs(x + 1j*np.abs(hilbert(x))), 0, X)
+
+
+    peaks = [find_peaks(x, distance=0.5*fs, height=0.3 * np.quantile(x, 0.9))[0] for x in X.T]
+
+    peaks_diff = [np.diff(p) for p in peaks]
+    peaks_diff = [p[(p > 0.5*fs) & (p < 1.5*fs)] for p in peaks_diff]
+    hr_canditates = np.array([60*fs/np.mean(p) for p in peaks_diff])
+
+    possible_axes = (hr_canditates>40) & (hr_canditates<200)
+
+    if np.sum(possible_axes) > 1:
+        # compute autocorrelation function of hilbert output
+        X_autocorr = np.apply_along_axis(lambda x: np.correlate(x, x, mode='full'), 0, X)
+        X_autocorr_selected = X_autocorr[int(len(X_autocorr)//2 + 0.4*fs): int(len(X_autocorr)//2 + 1.5*fs)]
+        selected_axis = np.argmax(np.max(X_autocorr_selected, axis=0))
+    elif np.sum(possible_axes) == 1:
+        selected_axis = np.argmax(possible_axes)
+    else: # no axis found, take x axis
+        selected_axis = 0
+
+    hr = hr_canditates[selected_axis]
+    return hr
+
+def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
+    corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
+    figure = plt.figure(figsize=(8, 8))
+    hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
+    mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
+    correlation_coefficient = corr(hr_true, hr_pred)
+
+    plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae:.2f}, Corr: {correlation_coefficient:.2f}")
+
+    plt.plot(x_lim, y_lim, color='k', linestyle='-', linewidth=2)
+    plt.xlim(*x_lim)
+    plt.ylim(*y_lim)
+    plt.xlabel('True HR (bpm)')
+    plt.ylabel('Predicted HR (bpm)')
+    plt.legend()
+    return figure

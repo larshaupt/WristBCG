@@ -617,7 +617,7 @@ def a_processing(signal, fs, detrend_window_size=None):
     signal_bandpass = sosfiltfilt(sos, signal_detrend)
     return signal_bandpass
 
-def full_a_processing(df_snip, fs, channels=[], detrend_window_size=None):
+def full_a_processing(df_snip, fs, channels=[], cutoff_frequencies = [0.5,2.0], detrend_window_size=None):
     """
     Apply signal processing to a DataFrame.
 
@@ -637,7 +637,7 @@ def full_a_processing(df_snip, fs, channels=[], detrend_window_size=None):
 
     mag_filtered = np.linalg.norm(np.array(channels_filtered), axis=0)
 
-    filter_sos = butter(2, [0.5, 2.0], 'bandpass', fs=fs, output='sos')
+    filter_sos = butter(2, cutoff_frequencies, 'bandpass', fs=fs, output='sos')
     mag_filtered = sosfiltfilt(filter_sos, mag_filtered)
 
     df_mag_filtered = pd.Series(mag_filtered, index=df_snip.index, name='mag_filtered')
