@@ -3,7 +3,86 @@ import torch
 import torch.nn as nn
 from scipy.stats import laplace, norm
 
-class PriorLayer(nn.Module):
+
+class Postprocessing(nn.Module):
+
+    def __init__(self, dim, min_hr, max_hr, return_probs, uncert="std", method="raw"):
+        """
+        Construct the Prior Layer translating instantaneous bin probabilities into contextualized HR predictions.
+        :param dim: number of bins
+        :param min_hr: minimal predictable frequency
+        :param max_hr: maximal predictable frequency
+        :param return_probs: returns contextualized bin probabilities if set to True, HR estimates in BPM otherwise.
+        :param uncert: The uncertainty measure to use. One of ["entropy", "std"].
+        :param kwargs: passed to parent class
+        """
+        super(Postprocessing, self).__init__()
+        self.dim = dim
+        self.method = method
+        self.min_hr = min_hr
+        self.max_hr = max_hr
+        self.return_probs = return_probs
+        self.uncert = uncert
+        bins = np.array([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]])
+        bins = (bins[1:] + bins[:-1])/2
+        self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
+        #self.bins = nn.Parameter(torch.tensor([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]], dtype=torch.float32), requires_grad=False)
+
+    def hr(self, i):
+        """
+        Helper function to calculate heart rate based on bin index
+        :param i: bin index
+        :param dim: number of bins
+        :return: heart rate in bpm
+        """
+        return self.min_hr + (self.max_hr - self.min_hr) * i / self.dim
+
+
+    def fit_layer(self, ys, distr="laplace", sparse=False, learn_state_prior=False):
+        pass
+
+
+    def forward(self, ps, method=None):
+        method = method or self.method
+        if method == "raw":
+            # return input
+            return self.forward_raw(ps)
+        else:
+            raise NotImplementedError(f"Unknown method: {method}")
+        
+    def forward_raw(self, ps):
+        """
+        Returns the raw input probabilities.
+        :param ps: tf.tensor of shape (n_samples, n_bins) containing probabilities
+        :return: probs : tf.tensor of same shape, only returned if return_probs=True
+                 E_x : tf.tensor of shape (n_samples,) containing the expected HR, only if return_probs=False
+                 uncert : tf.tensor of shape (n_samples,) containing est. uncertainty of the prediction
+        """
+        uncert = self._compute_uncertainty(ps)
+        E_x = self._compute_expectation(ps)
+        if self.return_probs:
+            return E_x, uncert, ps
+        else:
+            
+            return E_x, uncert
+
+    def _compute_expectation(self, probs):
+        E_x = torch.sum(probs * self.bins[None, :], axis=1)
+        return E_x
+    
+    def _compute_uncertainty(self, probs):
+        if self.uncert == "std":
+            E_x = self._compute_expectation(probs)
+            E_x2 = torch.sum(probs * self.bins[None, :] ** 2, axis=1)
+            uncert = torch.sqrt(E_x2 - E_x**2)
+        elif self.uncert == "entropy":
+            uncert = -torch.sum(probs * torch.log(probs + 1e-10), axis=1)
+        else:
+            raise NotImplementedError(f"Unknown uncertainty measure: {self.uncert}")
+        
+        return uncert
+
+class BeliefPPG(Postprocessing):
     """
     Implements functionality for the belief propagation / decoding framework.
     The layer is intended to be added as last layer to a trained network with instantaneous HR
@@ -22,7 +101,7 @@ class PriorLayer(nn.Module):
         :param uncert: The uncertainty measure to use. One of ["entropy", "std"].
         :param kwargs: passed to parent class
         """
-        super(PriorLayer, self).__init__()
+        super(Postprocessing, self).__init__()
         self.state_prior = torch.tensor(np.ones(dim) / dim, dtype=torch.float32)
         self.state = nn.Parameter(self.state_prior.clone(), requires_grad=False)
         self.dim = dim
@@ -137,41 +216,6 @@ class PriorLayer(nn.Module):
         else:
             raise NotImplementedError(f"Unknown method: {method}")
         
-    def forward_raw(self, ps):
-        """
-        Returns the raw input probabilities.
-        :param ps: tf.tensor of shape (n_samples, n_bins) containing probabilities
-        :return: probs : tf.tensor of same shape, only returned if return_probs=True
-                 E_x : tf.tensor of shape (n_samples,) containing the expected HR, only if return_probs=False
-                 uncert : tf.tensor of shape (n_samples,) containing est. uncertainty of the prediction
-        """
-        uncert = self._compute_uncertainty(ps)
-        E_x = self._compute_expectation(ps)
-        if self.return_probs:
-            return E_x, uncert, ps
-        else:
-            
-            return E_x, uncert
-
-    def forward_sumprod(self, ps):
-        """
-        Calculates a stateful forward pass applying the transition prior (symbolically).
-        Assumes batch consists of consecutive samples. Overrides parent function.
-        :param ps: tf.tensor of shape (n_samples, n_bins) containing probabilities
-        :return: probs : tf.tensor of same shape, only returned if return_probs=True
-                 E_x : tf.tensor of shape (n_samples,) containing the expected HR, only if return_probs=False
-                 uncert : tf.tensor of shape (n_samples,) containing est. uncertainty of the prediction
-        """
-        probs = self._propagate_sumprod(ps)
-
-        E_x = self._compute_expectation(probs)
-
-        uncert = self._compute_uncertainty(probs)
-
-        if self.return_probs:
-            return E_x, uncert, ps
-        else:
-            return E_x, uncert
     
     def _update_prob(self, prev_maxprod, curr, trans_prob):
         """
@@ -254,6 +298,27 @@ class PriorLayer(nn.Module):
 
 
 
+from filterpy.kalman import KalmanFilter,rts_smoother
+from filterpy.common import Q_discrete_white_noise
+
+class KalmanSmoother():
+    def __init__(self, dt=8, noise=5, Q=1e-5):
+
+        self.fk = KalmanFilter(dim_x=2, dim_z=1)
+        self.fk.x = np.array([0.5, 0.])      # state (x and dx)
+        self.fk.F = np.array([[1., dt],
+                            [0., 1.]])    # state transition matrix
+        self.fk.H = np.array([[1., 0.]])    # Measurement function
+        self.fk.P*= 100.                     # covariance matrix
+        self.fk.R = noise                   # state uncertainty
+        self.fk.Q = Q_discrete_white_noise(dim=2, dt=dt, var=Q)  # process uncertainty
+    
+    def smooth(self, zs):
+        mu, cov, _, _ = self.fk.batch_filter(zs)
+        M, p, C, _ = self.fk.rts_smoother(mu, cov)
+        return M
+    
+
 
 def test_PriorLayer():
     # Define parameters
@@ -265,7 +330,7 @@ def test_PriorLayer():
     uncert = "entropy"
 
     # Create an instance of PriorLayer
-    prior_layer = PriorLayer(dim, min_hr, max_hr, is_online, return_probs, uncert)
+    prior_layer = Postprocessing(dim, min_hr, max_hr, is_online, return_probs, uncert)
 
     # Generate random input data
     num_samples = 5

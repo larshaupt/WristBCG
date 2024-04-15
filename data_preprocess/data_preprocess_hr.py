@@ -560,7 +560,15 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
                 raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
         else:
             raise ValueError(f"Invalid sampling rate {args.sampling_rate} for dataset {dataset}")
-    
+    elif dataset == 'capture24all':
+        if (args.sampling_rate == 100 or args.sampling_rate == 0) and args.step_size == 8 and args.window_size == 10:
+            sampling_rate = 100
+
+            data_path = config.data_dir_Capture24_processed_all
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,  subsample=subsample_rate, reconstruction=reconstruction)
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} or sampling rate {args.sampling_rate} for dataset {dataset}")
+
     elif dataset == 'apple100':
         sampling_rate = 100
         # take the dataset, that has a couple of metrics for each window

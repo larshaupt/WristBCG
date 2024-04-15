@@ -49,10 +49,10 @@ def predict_from_json(json_file, mode="finetune", extra_args={}, split_partition
         raise ValueError(f"Mode {mode} not supported")
 
     args.cuda = 1
-    #args.data_thr_hr = 0
-    #args.data_thr_max = 100
-    #args.data_thr_angle = 100
-    #args.data_thr_avg = 100
+    args.data_thr_hr = 0
+    args.data_thr_max = 100
+    args.data_thr_angle = 100
+    args.data_thr_avg = 100
 
     # Testing
     #######################
@@ -143,7 +143,7 @@ def predict_from_json(json_file, mode="finetune", extra_args={}, split_partition
 
 X, Y, D, P = [], [], [], [] 
 
-for split in range(5):
+for split in [0]:
 
 
     #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_stepsize_4/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
@@ -156,9 +156,9 @@ for split in range(5):
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_windowsize_60_stepsize_15_gru/lincls_hrmin_0.0_hrmax_0.25_CorNET_dataset_max_hrv_split{split}_eps60_bs512_config.json"
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_timesplit_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json"
-    json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
+    #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_timesplit_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
     #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_CNN_AE_pretrain_max_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CNN_AE_dataset_max_v2_split4_eps60_bs512_config.json"
-    #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_AttentionCorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_hrmin_30_hrmax_120_AttentionCorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
+    json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_AttentionCorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_hrmin_30_hrmax_120_AttentionCorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
 
     #_X, _Y, _D, _P = predict_from_json(json_file, mode="finetune", split_partition = "val")
     #X.append(_X)
@@ -166,7 +166,7 @@ for split in range(5):
     #D.append(_D)
     #P.append(_P)
 
-_X, _Y, _D, _P = predict_from_json(json_file, mode="finetune", split_partition = "test", extra_args={"dataset": "apple100"})
+_X, _Y, _D, _P = predict_from_json(json_file, mode="finetune", split_partition = "test")
 X.append(_X)
 Y.append(_Y)
 D.append(_D)
@@ -177,13 +177,13 @@ D = np.concatenate(D)
 P = np.concatenate(P)
 
 #%%
-split = 0
-mode = "pretraining"
+split = 1
+mode = "finetuning"
 split_partition = "test"
 extra_args = {}
-json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_CNN_AE_pretrain_max_v2_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CNN_AE_dataset_max_v2_split{split}_eps60_bs512_config.json"
-#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
-#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
+#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_CNN_AE_pretrain_max_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CNN_AE_dataset_max_v2_split{split}_eps60_bs512_config.json"
+json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
+json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
 with open(json_file) as json_file:
         json_args = json.load(json_file)
 
@@ -217,7 +217,7 @@ args.data_thr_hr = 0
 args.data_thr_max = 100
 args.data_thr_angle = 100
 args.data_thr_avg = 100
-args.dataset = "max_v2"
+args.dataset = "appleall"
 
 
 # Testing
@@ -301,10 +301,10 @@ for i, (x, y, d) in enumerate(data_loader):
 X = np.concatenate(X)
 Y = np.concatenate(Y)
 D = np.concatenate(D)
-P = np.concatenate(P)
+P = np.concatenate(P).squeeze()
 
-#P = P*(args.hr_max - args.hr_min) + args.hr_min
-#Y = Y*(args.hr_max - args.hr_min) + args.hr_min
+P = P*(args.hr_max - args.hr_min) + args.hr_min
+Y = Y*(args.hr_max - args.hr_min) + args.hr_min
 
 corr = np.corrcoef(Y, P)[0,1]
 mae = np.mean(np.abs(Y-P))
@@ -579,69 +579,270 @@ for i in range(4):
     axes[i//2, i%2].set_title(f"{metric_names[i]}")
     axes[i//2, i%2].set_xlabel("ratio")
     axes[i//2, i%2].set_ylabel("mae")
-# 
+# %%
+
+# %%
+
+#plot some traces
+for i in [1,50,400,800,730, 920, 320, 220]:
+    plt.plot(X_test[i,:,0], label="acc_x")
+    plt.plot(X_test[i,:,1], label="acc_y")
+    plt.plot(X_test[i,:,2], label="acc_z")
+    plt.legend()
+    plt.xlabel("Time [ms]")
+    plt.ylabel("Acceleration")
+    plt.savefig(f"/local/home/lhauptmann/thesis/images/midterm/signal_raw{i}.png")
+    plt.clf()
+# %%
+from scipy.signal import convolve
+P_smooth = convolve(P, np.ones(5)/5, mode="same")
+timestamps = D.reshape(-1,2)[:,1]
+plt.plot(timestamps[100:1000], Y[100:1000], label="True")
+plt.plot(timestamps[100:1000], P[100:1000], label="Predicted")
+plt.xlabel("Time [s]")
+plt.ylabel("HR [bpm]")
+plt.legend()
+
 
 #%%
-# Kalman Smoothing Trial
-from filterpy.kalman import KalmanFilter,rts_smoother
-from filterpy.common import Q_discrete_white_noise
+res = []
+i = 6847
 
-zs = P[100].squeeze()
-noise = 10
-Q=0.000001
-fk = KalmanFilter(dim_x=2, dim_z=1)
-
-fk.x = np.array([0.5, 0.])      # state (x and dx)
-dt = 8
-fk.F = np.array([[1., dt],
-                    [0., 1.]])    # state transition matrix
-
-fk.H = np.array([[1., 0.]])    # Measurement function
-fk.P*= 100.                     # covariance matrix
-fk.R = noise                   # state uncertainty
-fk.Q = Q_discrete_white_noise(dim=2, dt=dt, var=Q)  # process uncertainty
-
-
-# filter data with Kalman filter, than run smoother on it
-mu, cov, _, _ = fk.batch_filter(zs)
-M, p, C, _ = fk.rts_smoother(mu, cov)
-
-
-
-plt.plot(zs, label='noisy measurements', color='r')
-plt.plot(M[:, 0], label='RTS smoothed', color='b')
-plt.plot(mu[:, 0], label='KF output', color='g')
-plt.legend(loc='best')
-
+for freq in np.arange(0,200,1):
+    freq = freq / 60
+    x_sample = df_res.loc[i]["X"]
+    x_sample = x_sample + 1 * np.sin(2 * np.pi * freq * np.arange(0, len(x_sample))).repeat(3).reshape(-1,3)
+    x_sample = torch.Tensor(x_sample).unsqueeze(0).to(DEVICE).float()
+    y_sample = df_res.loc[i]["Y"]
+    hr_pred = (model_test(x_sample)[0] * (args.hr_max - args.hr_min)) + args.hr_min
+    #print(f"True HR: {y_sample}, Predicted HR: {hr_pred.item()}")
+    res.append((freq*60, hr_pred.item()))
 # %%
-class KalmanSmoother():
-    def __init__(self, dt=8, noise=5, Q=1e-5):
-
-        self.fk = KalmanFilter(dim_x=2, dim_z=1)
-        self.fk.x = np.array([0.5, 0.])      # state (x and dx)
-        self.fk.F = np.array([[1., dt],
-                            [0., 1.]])    # state transition matrix
-        self.fk.H = np.array([[1., 0.]])    # Measurement function
-        self.fk.P*= 100.                     # covariance matrix
-        self.fk.R = noise                   # state uncertainty
-        self.fk.Q = Q_discrete_white_noise(dim=2, dt=dt, var=Q)  # process uncertainty
+res = pd.DataFrame(res, columns=["freq", "hr_pred"])
+# %%
+from scipy.signal import periodogram
+frequencies, per = periodogram(res["hr_pred"], fs=100)
+# %%
+plt.plot(frequencies, per)
+# %%
+from captum.attr import IntegratedGradients, InputXGradient, Saliency, DeepLift, GuidedBackprop, GuidedGradCam, Deconvolution, Occlusion, Lime, ShapleyValueSampling, FeatureAblation, FeaturePermutation
+import seaborn as sns
+class ModelWrapper(nn.Module):
+    def __init__(self, model):
+        super(ModelWrapper, self).__init__()
+        self.model = model
+    def forward(self, x):
+        return self.model(x)[0]
     
-    def smooth(self, zs):
-        mu, cov, _, _ = self.fk.batch_filter(zs)
-        M, p, C, _ = self.fk.rts_smoother(mu, cov)
-        return M
+torch.manual_seed(123)
+np.random.seed(123)
 
-smoother = KalmanSmoother(dt=8, noise=10, Q=1e-5)
-zs = P[19].squeeze()
-M, mu = smoother.smooth(zs)
-plt.plot(zs, label='noisy measurements', color='r')
-plt.plot(M[:, 0], label='RTS smoothed', color='b')
-plt.plot(mu[:, 0], label='KF output', color='g')
-plt.legend(loc='best')
+inp_X = torch.Tensor(X[7000:7001,...]).to(DEVICE).float()
+hr_true = Y[7000]
+
+model_test.eval()
+pred,_ = model_test(inp_X)
+pred = pred * (args.hr_max - args.hr_min) + args.hr_min
+
+
+methods = {"IntegratedGradients": IntegratedGradients, 
+           "InputXGradient": InputXGradient,
+            "Saliency": Saliency,
+            #"DeepLift": DeepLift,
+            "GuidedBackprop": GuidedBackprop,
+            #"GuidedGradCam": GuidedGradCam,
+            "Deconvolution": Deconvolution,
+            #"Occlusion": Occlusion,
+            "Lime": Lime,
+            "ShapleyValueSampling": ShapleyValueSampling,
+            "FeatureAblation": FeatureAblation,
+            "FeaturePermutation": FeaturePermutation
+
+
+           }
+#%%
+for method_name, method in methods.items():
+    model_test.train()
+    model_attr = ModelWrapper(model_test)
+
+    ig = method(model_attr)
+    #ig = InputXGradient(model_attr)
+    attributions = ig.attribute(inp_X, target=0)
+
+
+    print(f"True HR: {hr_true:.2f}, Predicted HR: {pred.item():.2f}")
+
+
+
+    signal = inp_X[0,:,2].detach().cpu().numpy()
+    signal_attr = attributions[0,:,2].detach().cpu().numpy()
+    plt.figure()
+    plt.plot(range(len(signal)), signal, color='blue', alpha=0.2)  # Plot the line in a neutral color with low alpha
+
+    # Overlaying a scatter plot with color-encoded attribution
+    
+    plt.scatter(range(len(signal)), signal, c=signal_attr, cmap='viridis', s=10)  # Scatter plot with color-encoded attribution
+    plt.title(f"{method_name}: True HR: {hr_true:.2f}, Predicted HR: {pred.item():.2f}")
+    plt.colorbar(label='Attribution')
+# %%
+from scipy.signal import butter, sosfiltfilt
+res = []
+for i in np.arange(0,len(X),10):
+    print(i)
+    res_i = []
+    input_X = X[i,...]
+    hr_true = Y[i]
+    delta = 2/60
+
+    hr_start = 5
+    hr_end = 600
+
+    hr_pred_orig, _ = model_test(torch.Tensor(input_X.copy()).unsqueeze(0).to(DEVICE).float())
+    hr_pred_orig = hr_pred_orig.item() * (args.hr_max - args.hr_min) + args.hr_min
+
+    for c_hr in np.arange(hr_start,hr_end, 2):
+
+        c_freq = c_hr / 60
+        # apply bandstop filter for different frequencies
+        bandpass_filter = butter(6, [c_freq - delta, c_freq + delta], btype="bandstop", fs=100, output="sos")
+        input_X_bandpass = sosfiltfilt(bandpass_filter, input_X, axis=0)
+        input_X_bandpass = (input_X_bandpass - input_X_bandpass.mean(axis=0)) / input_X_bandpass.std(axis=0)
+        #hr_target = 20
+        #synth_signal = np.sin(2 * np.pi * hr_target/60 * np.arange(0, 10, 1/100)) + np.random.normal(0, 0.1, 1000)
+        #synth_signal = np.stack([synth_signal, synth_signal, synth_signal], axis=1)
+        out, feat = model_test(torch.Tensor(input_X_bandpass.copy()).unsqueeze(0).to(DEVICE).float())
+        hr_pred = out.item() * (args.hr_max - args.hr_min) + args.hr_min
+        res_i.append((c_hr, hr_pred, hr_pred_orig, hr_true))
+    res.append(res_i)
+
+res = np.array(res)
+
+#%%
+
+df_res = pandas.DataFrame(res.reshape(-1, res.shape[-1]), columns=["hr_target", "hr_pred", "hr_pred_orig", "hr_true"])
+df_res["dist_from_true"] = df_res["hr_target"] - df_res["hr_true"]
+df_res["deviation"] = np.abs(df_res["hr_pred"] - df_res["hr_pred_orig"])
+
+bins = pd.cut(df_res["dist_from_true"], bins=300)
+# take center of bins
+bins = bins.apply(lambda x: np.round(x.mid,3))
+#plot median of deviation per bin
+df_res["bin"] = bins
+#df_res = df_res[df_res["bin"] ]
+
+df_res_group = df_res.groupby("bin").agg({"deviation": ["median", lambda x: np.quantile(x, 0.25), lambda x: np.quantile(x, 0.75)]})
+
+plt.plot(df_res_group.index, df_res_group["deviation"]["median"])
+plt.fill_between(df_res_group.index, df_res_group["deviation"].iloc[:,1],  df_res_group["deviation"].iloc[:,2], alpha=0.3)
+plt.ylim(0,2)
+
+# %%
+plt.figure(figsize=(10,10))
+deviation = np.abs(res[...,1] - res[...,3])
+mean = np.median(deviation, axis=0)
+x = np.mean(res[...,0], axis=0)/60 # they should all be the same
+std = np.std(deviation, axis=0)
+quant_high = np.quantile(deviation, 0.75, axis=0)
+quant_low = np.quantile(deviation, 0.25, axis=0)
+plt.plot(x, mean, label="Median")
+plt.fill_between(x, quant_low, quant_high, alpha=0.3, label='25 and 75 Quantile')
+#plt.axhline(0,color='red', alpha=0.2)
+plt.xlim(0,10)
+plt.locator_params(axis='x', nbins=20)
+plt.legend()
+plt.xlabel("Frequency [Hz]")
+plt.ylabel("Absolute Error [bpm]")
+
+#%%
+all_res = {}
+
+#%%
+
+from scipy.signal import butter, sosfiltfilt
+res_swap = []
+for i in np.arange(0,len(X),1):
+    input_X = X[i,...]
+    hr_true = Y[i]
+
+    hr_pred_orig, _ = model_test(torch.Tensor(input_X.copy()).unsqueeze(0).to(DEVICE).float())
+    hr_pred_orig = hr_pred_orig.item() * (args.hr_max - args.hr_min) + args.hr_min
+    res_swap.append([-1, hr_pred_orig, hr_pred_orig, hr_true])
+
+    for axis in [0,1,2]:
+        
+        s_axis1 = axis
+        s_axis2 = (axis+1) % 3
+        input_X_axis = input_X.copy()
+        input_X_axis[...,s_axis1] = input_X[...,s_axis2]
+        input_X_axis[...,s_axis2] = input_X[...,s_axis1]
+        out, feat = model_test(torch.Tensor(input_X_axis).unsqueeze(0).to(DEVICE).float())
+        hr_pred = out.item() * (args.hr_max - args.hr_min) + args.hr_min
+        res_swap.append([axis, hr_pred, hr_pred_orig, hr_true])
+
+
+res_swap = np.array(res_swap)
+
+df_res_swap = pandas.DataFrame(res_swap, columns=["axis", "hr_pred", "hr_pred_orig", "hr_true"])
+df_res_swap["axis"] = df_res_swap["axis"].map({0: "x <-> y", 1: "y <-> z", 2: "z <-> x", -1: "original"})
+df_res_swap["deviation"] = np.abs(df_res_swap["hr_pred"] - df_res_swap["hr_pred_orig"])
+df_res_swap["error"] = np.abs(df_res_swap["hr_pred"] - df_res_swap["hr_true"])
+df_res_swap.groupby("axis").agg({"deviation": ["mean", "std"], "error": ["mean", "std"]})
+
+# %%
+res_occ = []
+for i in np.arange(0,len(X),1):
+    input_X = X[i,...]
+    hr_true = Y[i]
+
+    hr_pred_orig, _ = model_test(torch.Tensor(input_X.copy()).unsqueeze(0).to(DEVICE).float())
+    hr_pred_orig = hr_pred_orig.item() * (args.hr_max - args.hr_min) + args.hr_min
+    res_occ.append([-1, hr_pred_orig, hr_pred_orig, hr_true])
+
+    for axis in [0,1,2]:
+        
+        input_X_axis = input_X.copy()
+        input_X_axis[...,axis] = 0
+
+        out, feat = model_test(torch.Tensor(input_X_axis).unsqueeze(0).to(DEVICE).float())
+        hr_pred = out.item() * (args.hr_max - args.hr_min) + args.hr_min
+        res_occ.append([axis, hr_pred, hr_pred_orig, hr_true])
+
+
+res_occ = np.array(res_occ)
+
+df_res_occ = pandas.DataFrame(res_occ, columns=["axis", "hr_pred", "hr_pred_orig", "hr_true"])
+df_res_occ["axis"] = df_res_occ["axis"].map({0: "x", 1: "y", 2: "z", -1: "original"})
+df_res_occ["deviation"] = np.abs(df_res_occ["hr_pred"] - df_res_occ["hr_pred_orig"])
+df_res_occ["error"] = np.abs(df_res_occ["hr_pred"] - df_res_occ["hr_true"])
+df_res_occ.groupby("axis").agg({"deviation": ["mean", "std"], "error": ["mean", "std"]})
+
+
+
+
+# %%
+all_res["CorNET"] = (df_res_occ.copy(), df_res_swap.copy())
+
 # %%
 
 
-import pickle
-with open("/local/home/lhauptmann/thesis/data/MaxDataset_v2/12_ecg.pickle", "rb") as f:
-    data = pickle.load(f)
 # %%
+
+occlusion = pd.concat([all_res["AttentionCorNET"][0], all_res["CorNET"][0]], axis=0, keys=["AttentionCorNET", "CorNET"]).reset_index(level=0)
+occlusion = occlusion.rename(columns={"level_0": "model"})
+occlusion.boxplot(column="error", by=["axis","model",], figsize=(10,10), rot=45)
+
+#%%
+swap = pd.concat([all_res["AttentionCorNET"][1], all_res["CorNET"][1]], axis=0, keys=["AttentionCorNET", "CorNET"]).reset_index(level=0)
+swap = swap.rename(columns={"level_0": "model"})
+swap.boxplot(column="error", by=["axis","model",], figsize=(10,10), rot=45)
+# %%
+sns.boxplot(data=swap, x="axis", y="error", hue="model", showfliers=False, showmeans=True)
+# %%
+sns.boxplot(data=occlusion, x="axis", y="deviation", hue="model",  showfliers=False, showmeans=True)
+# %%
+
+swap.to_pickle("/local/home/lhauptmann/thesis/CL-HAR/results/swap.pkl")
+occlusion.to_pickle("/local/home/lhauptmann/thesis/CL-HAR/results/occlusion.pkl")
+# %%
+
+

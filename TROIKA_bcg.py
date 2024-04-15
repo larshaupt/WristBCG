@@ -387,7 +387,7 @@ class Troika:
 
         n_acc_windows = acc.shape[0]
         n_windows = n_acc_windows
-        current_window = 1
+        current_window = 0
         progress_bar = tqdm(total=n_windows, initial=current_window)
 
         spt = SpectralPeakTracker(ppg_sampling_freq=self.sampling_freq, n_freq_bins=self.n_freq_bins, init_freq_bounds=[50, 90])
@@ -421,7 +421,7 @@ class Troika:
             bandpass_filter = butter(4, self.cutoff_freqs, btype='band', fs=self.sampling_freq, output='sos')
             acc_reconstructed = sosfiltfilt(bandpass_filter, acc_reconstructed)
 
-            if current_window == 1:
+            if current_window == 0:
                 frequencies, sparse_acc_spectrum = self.ssr.transform(acc_reconstructed)
                 prev_window_hr_idx = spt.transform_first(sparse_acc_spectrum)
                 

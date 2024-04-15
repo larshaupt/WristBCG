@@ -131,6 +131,11 @@ def compute_hr_ssa_original(X, fs = None, lagged_window_size = 501, **kwargs):
     return hr_rr
 
 
+def compute_hr_median(X, Y_train, fs=100, **kwargs):
+    # compute median HR from training data
+    hr_median = np.median(Y_train)
+    return [hr_median]*len(X)
+
 def extract_hr_peaks(signal, fs, method="cwt"):
     if method == "cwt":
         peaks = find_peaks_cwt(signal, np.arange(5,80))
@@ -218,7 +223,7 @@ def select_components(acc_groups, threshold=0.1):
 def compute_hr_troika_w_tracking(X, fs=100, f_low=0.5, f_high=4, **kwargs):
     troika = TROIKA_bcg.Troika(window_duration=10, acc_sampling_freq=fs, cutoff_freqs=(f_low, f_high))
     hr = []
-    for hr_i in troika.transform(X):
+    for i, hr_i in enumerate(troika.transform(X)):
         hr.append(hr_i)
     return hr
 

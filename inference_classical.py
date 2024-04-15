@@ -37,6 +37,7 @@ def run_classical(config_dict):
     print(f"Processing {dataset} with {framework}")
 
 
+
     results_df_test = None
     for split in range(5):
         print(f"Processing split {split}")
@@ -66,6 +67,9 @@ def run_classical(config_dict):
             compute_hr = compute_hr_kantelhardt
         elif config_dict["framework"] == 'Kantelhardt_original':
             compute_hr = compute_hr_kantelhardt_original
+        elif config_dict["framework"] == 'median':
+            compute_hr = compute_hr_median
+            X_train, Y_train, pid_train, metrics_train, X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, split, load_train=True)
         else:
             raise NotImplementedError
 
@@ -73,14 +77,19 @@ def run_classical(config_dict):
         #pdb.set_trace()
         wandb.init(project="hr_results", config=config_dict, group=config_dict["framework"], mode=config_dict["wandb_mode"])
 
-
-        if config_dict["framework"] == 'Troika_w_tracking':
+        if config_dict["framework"] == 'median':
+            hr_rr_val = compute_hr_median(X_val, Y_train)
+        elif config_dict["framework"] == 'Troika_w_tracking':
             hr_rr_val = compute_hr(X_val, fs=fs)
         else:
             hr_rr_val = []
             print(f"Processing val set")
             progress_bar = tqdm.tqdm(total=len(X_val))
             for i, X in enumerate(X_val):
+
+                if len(X) == 0:
+                    hr_rr_val.append(np.nan)
+                    continue
 
                 progress_bar.update(1)
                 hr_rr = compute_hr(X, fs=fs, **config_dict)
@@ -95,18 +104,24 @@ def run_classical(config_dict):
         results_df_val.to_pickle(predictions_path_val)
         print(f"Saves results to {predictions_path_val}")
 
-        figure = plot_true_pred(results_df_val["hr_true"], results_df_val["hr_pred"])
+        figure = plot_true_pred(results_df_val["y_true"], results_df_val["hr_pred"])
         wandb.log({"true_pred_val": figure})
 
         if not isinstance(results_df_test, pd.DataFrame):
-
-            if config_dict["framework"] == 'Troika_w_tracking':
+            if config_dict["framework"] == 'median':
+                hr_rr_test = compute_hr_median(X_test, Y_train)
+            elif config_dict["framework"] == 'Troika_w_tracking':
                 hr_rr_test = compute_hr(X_test, fs=fs)
             else:
                 hr_rr_test = []
                 print(f"Processing test set")
                 progress_bar = tqdm.tqdm(total=len(X_test))
                 for i, X in enumerate(X_test):
+
+                    if len(X) == 0:
+                        hr_rr_test.append(np.nan)
+                        continue
+
                     progress_bar.update(1)
                     hr_rr = compute_hr(X, fs=fs)
 
@@ -123,7 +138,7 @@ def run_classical(config_dict):
         print(f"Saves results to {predictions_path_test}")
         results_df_test.to_pickle(predictions_path_test)
 
-        figure = plot_true_pred(results_df_test["hr_true"], results_df_test["hr_pred"])
+        figure = plot_true_pred(results_df_test["y_true"], results_df_test["hr_pred"])
         wandb.log({"true_pred_test": figure})
 
         # Finish the run
@@ -135,6 +150,7 @@ def parse_args():
     args.add_argument("--dataset", type=str, default="Apple100")
     args.add_argument("--framework", type=str, default="SSA")
     args.add_argument("--wandb_mode", type=str, default="disabled")
+    #return args.parse_args("--framework Troika_w_tracking --wandb_mode online".split(" "))
     return args.parse_args()
 
 #%%

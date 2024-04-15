@@ -16,7 +16,7 @@ from models.loss import *
 from trainer import *
 from main import get_parser
 from argparse import Namespace
-
+#%%
 def ece_loss(y_true, y_pred, bins=10):
 
     """
@@ -42,7 +42,9 @@ def ece_loss(y_true, y_pred, bins=10):
     bin_uppers = bin_boundaries[1:]
 
     confidences = np.max(y_pred, axis=1)
-    accuracies = y_true[np.arange(len(y_true)), np.argmax(y_pred, axis=1)]
+    
+    #accuracies = y_true[np.arange(len(y_true)), np.argmax(y_pred, axis=1)]
+    accuracies = np.argmax(y_true, axis=1) == np.argmax(y_pred, axis=1)
     ece = 0
     for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
         in_bin = (confidences > bin_lower) & (confidences < bin_upper)
@@ -53,100 +55,130 @@ def ece_loss(y_true, y_pred, bins=10):
             ece += np.abs(accuracy_in_bin - avg_confidence_in_bin) * prop_in_bin
     return ece
 
+
 #%%
+
+def nll_loss(y_true, y_pred):
+    log_pred = np.log(y_pred[np.arange(len(y_true)), np.argmax(y_true, axis=1)])
+    log_pred[log_pred == -np.inf] = 0
+    return -np.mean(log_pred)
+
+
+#%%
+
+def setup_model(json_file, split=0, model_uncertainty="std", dataset="max_v2"):
+    mode="finetune"
+
+    json_file = re.sub(r"split(\d+)", f"split{split}", json_file)
+    json_file = re.sub(r"(dataset_)(.*?)(_split)", f"dataset_{dataset}_split", json_file)
+    with open(json_file) as json_file:
+        json_args = json.load(json_file)
+
+    parser = get_parser()
+    args = parser.parse_args([])
+    args_dict = vars(args)
+    args_dict.update(json_args)
+    args = Namespace(**args_dict)
+
+
+
+    if not hasattr(args, "model_name"):
+        args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_split' + str(split)
+    
+    args.model_name
+    if mode == "finetune":
+        model_weights_path = args.lincl_model_file
+    elif mode == "pretrain":
+        model_weights_path = args.pretrain_model_file
+    else:
+        raise ValueError(f"Mode {mode} not supported")
+
+
+    # Testing
+    #######################
+    DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
+    print('device:', DEVICE, 'dataset:', args.dataset)
+
+    # Load data
+    train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
+
+
+    # Initialize and load test model
+    model_test, _ = setup_model_optm(args, DEVICE)
+
+
+    # Testing
+
+    if mode == "finetune":
+        
+        classifier = setup_linclf(args, DEVICE, model_test.out_dim)
+        model_test.set_classification_head(classifier)
+        model_weights = load_best_lincls(args)
+
+    else:
+        NotImplementedError("Only finetuning supported for now")
+
+    model_test.load_state_dict(model_weights, strict=False)
+    model_test = model_test.to(DEVICE)
+    model_test = add_probability_wrapper(model_test, args, DEVICE)
+    model_test.return_probs = True
+    model_test.uncertainty_model = model_uncertainty
+
+    return model_test, train_loader, val_loader, test_loader, args, DEVICE
+
+split = 0
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_bnn_pretrained_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_simsiam_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.0_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/config.json"
 #json_file = '/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_gaussian_classification_disc_hr_64_hrmin_30.0_CorNET_dataset_apple100_split0_eps60_bs128_config.json'
-json_file = '/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_NLE_hrmin_30_hrmax_120_CorNET_dataset_apple100_split1_eps60_bs512_config.json'
+json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_NLE_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json"
 #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_reconstruction_backbone_AE_pretrain_max_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_MSE_lambda1_1.0_lambda2_1.0_tempunit_tsfm/config.json"
-with open(json_file) as json_file:
-    json_args = json.load(json_file)
 
-parser = get_parser()
-args = parser.parse_args([])
-args_dict = vars(args)
-args_dict.update(json_args)
-args = Namespace(**args_dict)
-
-split = 0
-
-mode = "finetune"
-
-
-if not hasattr(args, "model_name"):
-    args.model_name = args.backbone + '_'+args.dataset + '_lr' + str(args.lr) + '_bs' + str(args.batch_size) + '_split' + str(split)
-else:
-    args.model_name = re.sub(r'split\d+', f"split{split}", args.model_name)
-
-if mode == "finetune":
-    model_weights_path = args.lincl_model_file
-elif mode == "pretrain":
-    model_weights_path = args.pretrain_model_file
-else:
-    raise ValueError(f"Mode {mode} not supported")
-
-# %%
-# Testing
-#######################
-DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
-print('device:', DEVICE, 'dataset:', args.dataset)
-#%%
-# Load data
-train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
+experiments = {
+    "NLL": f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_NLE_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json",
+    "Classification": f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_gaussian_classification_disc_hr_64_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json",
+    "BNN_FirstLast": f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_bnn_pretrained_firstlast_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json",
+    "BNN_FirstLast": f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_bnn_pretrained_hrmin_30_hrmax_120_CorNET_dataset_max_v2_split{split}_eps60_bs512_config.json",
+}
 
 #%%
-# Initialize and load test model
-model_test, _ = setup_model_optm(args, DEVICE)
+
+X, Y_prob, D, P, P_prob, P_uncert, splits = [], [], [], [], [], [], []
 
 #%%
-# Testing
-
-if mode == "finetune":
+dataset = "appleall"
+experiment = "NLL"
+for split in range(5):
     
-    classifier = setup_linclf(args, DEVICE, model_test.out_dim)
-    model_test.set_classification_head(classifier)
-    model_weights = load_best_lincls(args)
+    model_test, train_loader, val_loader, test_loader, args, DEVICE = setup_model(experiments[experiment], split=split, model_uncertainty="std", dataset=dataset)
 
-else:
-    NotImplementedError("Only finetuning supported for now")
-
-model_test.load_state_dict(model_weights, strict=False)
-model_test = model_test.to(DEVICE)
-model_test = add_probability_wrapper(model_test, args, DEVICE)
-model_test.return_probs = True
-model_test.uncertainty_model = "std"
-
-
-#%%
-
-X, Y_prob, D, P, P_prob, P_uncert = [], [], [], [], [], []
-#%%
 
 #tau = 1.352632
 #tau = 1
 #model_test.classifier.set_temperature(tau)
-model_test.eval()
-data_loader = test_loader
+    model_test.eval()
+    data_loader = test_loader
 
-with torch.no_grad():
-    for i, (x, y, d) in enumerate(data_loader):
-        print(f"Batch {i}/{len(data_loader)}")
-        x = x.to(DEVICE).float()
-        y = y.to(DEVICE)
-        d = d.to(DEVICE)
-        exp, p_uncert, p = model_test(x)
-        x = x.detach().cpu().numpy()
-        y = y.detach().cpu().numpy()
-        d = d.detach().cpu().numpy()
-        p = p.detach().cpu().numpy()
-        p_uncert = p_uncert.detach().cpu().numpy()
-        X.append(x)
-        Y_prob.append(y)
-        D.append(d)
-        P_prob.append(p)
-        P_uncert.append(p_uncert * (args.hr_max - args.hr_min))
-        P.append(convert_to_hr(exp, args))
+    with torch.no_grad():
+        for i, (x, y, d) in enumerate(data_loader):
+            print(f"Batch {i}/{len(data_loader)}")
+            x = x.to(DEVICE).float()
+            y = y.to(DEVICE)
+            d = d.to(DEVICE)
+            exp, p_uncert, p = model_test(x)
+            x = x.detach().cpu().numpy()
+            y = y.detach().cpu().numpy()
+            d = d.detach().cpu().numpy()
+            p = p.detach().cpu().numpy()
+            p_uncert = p_uncert.detach().cpu().numpy()
+            X.append(x)
+            Y_prob.append(y)
+            D.append(d)
+            P_prob.append(p)
+            P_uncert.append(p_uncert * (args.hr_max - args.hr_min))
+            P.append(convert_to_hr(exp, args))
+
+            splits.extend([split]*len(y))
 
 
 Y = [convert_to_hr(el, args) for el in Y_prob]
@@ -159,11 +191,12 @@ X_concat = np.concatenate(X)
 P_prob_concat = np.concatenate(P_prob)
 P_uncert_concat = np.concatenate(P_uncert)
 
+
 ece = ece_loss(np.concatenate(Y_prob), np.concatenate(P_prob))
 mae = np.mean(np.abs(Y_concat-P_concat))
 corr = np.corrcoef(Y_concat, P_concat)[0,1]
-#res.append({"tau": tau, "ece": ece, "mae": mae, "corr": corr})
-#res_df = pandas.DataFrame(res, columns=["tau", "ece", "mae", "corr"])
+    #res.append({"tau": tau, "ece": ece, "mae": mae, "corr": corr})
+    #res_df = pandas.DataFrame(res, columns=["tau", "ece", "mae", "corr"])
 
 
 #%%
@@ -186,7 +219,9 @@ df_res = pandas.DataFrame({"Y": Y_concat,
                            "uncert": P_uncert_concat.reshape(-1),
                            "sub": [el[0] for el in D_concat],
                             "time": [el[1] for el in D_concat], 
-                           "X": [el for el in X_concat]})
+                           "X": [el for el in X_concat],
+                            "split":splits,})
+
 
 df_res["abs_error"] = np.abs(df_res["Y"] - df_res["P"])
 subjects = df_res["sub"].unique()
@@ -218,18 +253,21 @@ for i, sub in enumerate(subjects):
 # %%
 # Look at HR and HR predictions over time
 fig, axes = plt.subplots(len(subjects),1, figsize=(8,3*len(subjects)))
-for i, sub in enumerate(subjects):
-    df_sub = df_res[df_res["sub"] == sub]
-    #df_sub = df_sub.iloc[500:-500]
-    
-    df_sub["Y"].rolling(10).median().plot(ax=axes[i], label="Y")
-    df_sub["P"].rolling(10).median().plot(ax=axes[i], label="P")
-    axes[i].set_title(f"Subject {sub} HR over time")
-    axes[i].legend()
 
+for i, sub in enumerate(subjects):
     ax2 = axes[i].twinx()
-    df_sub["uncert"].rolling(10).median().plot(ax=ax2, color="red", label="uncert", alpha=0.5)
-    
+
+    df_sub = df_res[df_res["sub"] == sub]
+    for split in range(1):
+        df_sub_split = df_sub[df_sub["split"] == split]
+        df_sub_split.set_index("time", inplace=True)
+        df_sub_split["Y"].rolling(10).median().plot(ax=axes[i], label=f"Y")
+        df_sub_split["P"].rolling(10).median().plot(ax=axes[i], label=f"P split {split}")
+        axes[i].set_title(f"Subject {sub} HR over time")
+        axes[i].legend()
+
+        df_sub_split["uncert"].rolling(10).median().plot(ax=ax2, color="red", label=f"uncertainty split {split}", alpha=0.5)
+        ax2.legend()
 fig.tight_layout()
 
 #%%
@@ -250,14 +288,15 @@ for i, sub in enumerate(subjects):
     fig.tight_layout()
 
 
+
+
 # %%
 import trainer
 import importlib
-import models.prior_layer
-importlib.reload(models.prior_layer)
-importlib.reload(trainer)
+import models.postprocessing
 
-postprocessing_model = models.prior_layer.PriorLayer(
+
+postprocessing_model = models.postprocessing.BeliefPPG(
             args.n_prob_class, 
             min_hr=args.hr_min, 
             max_hr=args.hr_max, 
@@ -333,7 +372,7 @@ def confidence_plot(uncert, pred_expectation, Y, ax=None, name="", distribution=
     ax.plot(np.arange(0,1.1,1/num_points), color="red")
     return ece
 
-confidence_plot(uncerts, preds, Y_concat, distribution="gaussian", name="Raw Prediction", num_points=10)
+confidence_plot(uncerts, preds, Y_concat, distribution="laplace", name="Raw Prediction", num_points=10)
 #%%
 
 def plot_excluion(HR_true, HR_pred, uncertainty, ax=None, metric="MAE", name=""):
@@ -378,11 +417,11 @@ def plot_uncert_vs_mae(HR_true, HR_pred, uncertainty, ax=None,  name=""):
 
     df_res = pandas.DataFrame({"hr_true": HR_true, 
                             "hr_pred": HR_pred, 
-                            "uncertainty": uncertainty})
+                            "uncertainty_squared": uncertainty**2})
 
 
 
-    df_res["bin"] = pd.cut(df_res["uncertainty"], bins=10)
+    df_res["bin"] = pd.cut(df_res["uncertainty_squared"], bins=10)
     df_res["bin"] = df_res["bin"].apply(lambda x : np.round((x.left + x.right)/2, 4))
     df_res["mse"] = (df_res["hr_true"] - df_res["hr_pred"])**2
     groups = df_res.groupby("bin")["mse"].mean()
@@ -395,11 +434,35 @@ def plot_uncert_vs_mae(HR_true, HR_pred, uncertainty, ax=None,  name=""):
 
 plot_uncert_vs_mae(Y_concat, preds ,uncerts, name="Raw Prediction")
 
+#%%
+HR_true, HR_pred, uncertainty, name = Y_concat, preds, uncerts, "Raw Prediction"
+
+fig, ax = plt.subplots(1,1, figsize=(10,5))
+
+df_res = pandas.DataFrame({"hr_true": HR_true, 
+                        "hr_pred": HR_pred, 
+                        "uncertainty_squared": uncertainty**2})
+
+
+
+df_res["bin"] = pd.cut(df_res["uncertainty_squared"], bins=10)
+#df_res["bin"] = df_res["bin"].apply(lambda x : np.round((x.left + x.right)/2, 4))
+df_res["mse"] = (df_res["hr_true"] - df_res["hr_pred"])**2
+groups = df_res.groupby("bin")["mse"].mean()
+groups.plot.bar(ax=ax, alpha=0.5, label=name)
+
+ax.set_xlabel("Uncertainty")
+ax.set_ylabel("MSE (Mean)")
+ax.set_title("Uncertainty vs MAE")
+ax.legend()
+
+
 # %%
 
 
-def plot_hit_rate(HR_true, HR_pred_probs, ax=None,  name="", hrmin=50, hrmax = 110):
-
+def plot_hit_rate(HR_true, HR_pred_probs, ax=None,  name="", hrmin=50, hrmax = 110, n_bins_divisor=8, n_bins_original=64):
+    assert np.log2(n_bins_divisor).is_integer(), "n_bins_divisor must be a power of 2"
+    n_bins = n_bins_original // n_bins_divisor
     if ax is None:
         fig, ax = plt.subplots(1,1, figsize=(10,5))
 
@@ -410,9 +473,9 @@ def plot_hit_rate(HR_true, HR_pred_probs, ax=None,  name="", hrmin=50, hrmax = 1
                             "probs": HR_pred_probs})
 
 
-    df_res["probs"] = df_res["probs"].apply(lambda x : x.reshape(-1, 8).sum(axis=1))
-    df_res["bin_l"] = [np.concatenate([[-np.inf], np.linspace(0,1,7)])]*len(df_res)
-    df_res["bin_h"] = [np.concatenate([np.linspace(0,1,7), [np.inf],])]*len(df_res)
+    df_res["probs"] = df_res["probs"].apply(lambda x : x.reshape(-1, n_bins_divisor).sum(axis=1))
+    df_res["bin_l"] = [np.concatenate([[-np.inf], np.linspace(0,1,n_bins-1)])]*len(df_res)
+    df_res["bin_h"] = [np.concatenate([np.linspace(0,1,n_bins-1), [np.inf],])]*len(df_res)
 
     df_res = df_res.explode(["bin_l", "bin_h", "probs"])
 
@@ -425,26 +488,11 @@ def plot_hit_rate(HR_true, HR_pred_probs, ax=None,  name="", hrmin=50, hrmax = 1
     plt.ylim(0,1)
     plt.xlabel("Confidence")
     plt.ylabel("Accuracy")
-    plt.title("Confidence Calibration (8 bins)")
+    plt.title(f"Confidence Calibration ({n_bins} bins)")
 
-plot_hit_rate(Y_concat, probs, name="Raw Prediction", hrmin = args.hr_min, hrmax = args.hr_max)
+plot_hit_rate(Y_concat, probs, name="Raw Prediction", hrmin = args.hr_min, hrmax = args.hr_max, n_bins_divisor=8)
 
 
 
-#%%
 
-def plot_hr(HR_true, HR_pred, uncert = None, HR_pred_raw = None, ax = None, title = ""):
-    if ax is None:
-        fig, ax = plt.subplots(1,1, figsize=(10,5))
-    ax.plot(HR_true, label="True HR")
-    ax.plot(HR_pred, label="Pred HR")
-    if uncert is not None:
-        ax.fill_between(np.arange(len(HR_true)), HR_pred-uncert, HR_pred+uncert, alpha=0.3, label="Uncertainty")
-    if HR_pred_raw is not None:
-        ax.plot(HR_pred_raw, label="Raw Pred HR", alpha=0.5)
-    ax.set_title(title)
-    ax.legend()
-
-#plot_hr(Y_concat, preds, uncerts, HR_pred_raw=P_concat, title="HR Prediction")
-plot_hr(Y_concat, preds, uncerts, title="HR Prediction")
 # %%

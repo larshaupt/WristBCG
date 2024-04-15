@@ -23,6 +23,8 @@ def get_parser():
     parser.add_argument('--pretrain_batch_size', type=int, default=512, help='batch size of pretraining')
     parser.add_argument('--batch_size', type=int, default=512, help='batch size of training')
     parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
+    parser.add_argument('--pretrain_n_epoch', type=int, default=60, help='number of training epochs for pretraining')
+
     parser.add_argument('--lr_pretrain', type=float, default=1e-4, help='learning rate for pretrain')
     parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight decay')
@@ -33,7 +35,7 @@ def get_parser():
     parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
     # dataset
-    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'apple100', 'parkinson100', 'max_v2'], help='name of dataset')
+    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2'], help='name of dataset')
     parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
     parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
     parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
@@ -52,6 +54,7 @@ def get_parser():
     parser.add_argument('--sampling_rate', type=int, default=0, help='sampling rate of the data. Warning: this will take longer time to load data')
     parser.add_argument('--lr_finetune_backbone', type=float, default=1e-5, help='learning rate for finetuning the backbone network')
     parser.add_argument('--lr_finetune_lstm', type=float, default=1e-4, help='learning rate for finetuning the lstm layer')
+    parser.add_argument('--num_layers_classifier', type=int, default=1, help='number of layers in the classifier')
     parser.add_argument('--window_size', type=int, default=10, help='window size for the dataset in seconds')
     parser.add_argument('--step_size', type=int, default=8, help='step size for the dataset in seconds')
     parser.add_argument('--take_every_nth_test', type=int, default=1, help='take every nth test sample, similar to increasing step size')
@@ -64,7 +67,7 @@ def get_parser():
     parser.add_argument('--bandpass_freq_min', type=float, default=0.1, help='minimum frequency for bandpass filter')
     parser.add_argument('--bandpass_freq_max', type=float, default=18, help='maximum frequency for bandpass filter')
     parser.add_argument('--hr_smoothing', type=int, default=1, help='smoothing of heart rate, window size')
-    parser.add_argument('--dropout_rate', type=float, default=0.1, help='dropout rate')
+    parser.add_argument('--dropout_rate', type=float, default=0.3, help='dropout rate')
     # augmentation
     parser.add_argument('--aug1', type=str, default='jit_scal',
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
@@ -74,8 +77,8 @@ def get_parser():
                         help='the type of augmentation transformation')
 
     # framework
-    parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction'], help='name of framework')
-    parser.add_argument('--backbone', type=str, default='AttentionCorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', 'HRCTPNet'], help='name of backbone network')
+    parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction', 'median', 'subject_median'], help='name of framework')
+    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', 'HRCTPNet'], help='name of backbone network')
     parser.add_argument('--num_kernels', type=int, default=32, help='number of kernels in CNN')
     parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
     parser.add_argument('--lstm_units', type=int, default=128, help='number of units in LSTM')
@@ -88,7 +91,7 @@ def get_parser():
                         help='byol: projector hidden size, simsiam: predictor hidden size, simclr: na')
 
     # postprocessing
-    parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg'], help='postprocessing method')
+    parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg', 'kalmansmoothing', 'raw'], help='postprocessing method')
     parser.add_argument('--transition_distribution', type=str, default='laplace', choices=['gauss', 'laplace'], help='transition distribution for belief ppg')
 
 
@@ -145,6 +148,15 @@ if __name__ == '__main__':
     args = setup_args(args)
     initial_mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
     train_loaders, val_loader, test_loader = setup_dataloaders(args, mode=initial_mode)
+
+    if args.framework == "median":
+        predict_median(train_loaders, val_loader, test_loader, args, mode="global")
+        exit()
+    if args.framework == "subject_median":
+        predict_median(train_loaders, val_loader, test_loader, args, mode="subject_wise")
+        exit()
+        
+
     model, optimizers, schedulers, criterion, logger = setup(args, DEVICE)
 
     # save config file
@@ -212,7 +224,7 @@ if __name__ == '__main__':
         trained_backbone.load_state_dict(trained_backbone_weights)
 
     ############################################################################################################
-    ############################ POSTPROCESSING ################################################################
+    ##########################W## POSTPROCESSING ################################################################
     ############################################################################################################
 
     if args.postprocessing != 'none':

@@ -10,7 +10,7 @@ from models.frameworks import *
 
 from models.backbones import *
 from models.loss import *
-from models.prior_layer import PriorLayer
+from models.postprocessing import Postprocessing, BeliefPPG
 from data_preprocess import data_preprocess_hr
 from torchmetrics.regression import LogCoshError
 from bayesian_torch.models.dnn_to_bnn import get_kl_loss
@@ -34,7 +34,12 @@ plot_dir_name = 'plot'
 if not os.path.exists(plot_dir_name):
     os.makedirs(plot_dir_name)
 
-corr = lambda a, b: pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
+def corr(a,b):
+    corr = pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
+    if np.isnan(corr):
+        return 0
+    else:
+        return corr
 
 def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     figure = plt.figure(figsize=(8, 8))
@@ -86,6 +91,14 @@ def setup_dataloaders(args, mode="finetuning"):
         sample_sequences = True
         sigma = args.label_sigma
         discrete_hr = True
+    elif mode == "postprocessing_no_discrete":
+        dataset = args.dataset
+        split = args.split
+        subsample_rate = args.subsample
+        reconstruction = False
+        sample_sequences = True
+        sigma = args.label_sigma
+        discrete_hr = False
     else:
         raise ValueError(f"Mode {mode} not recognized")
 
@@ -103,12 +116,12 @@ def setup_linclf(args, DEVICE, bb_dim):
     '''
 
     if args.backbone in ['CNN_AE'] and args.framework == 'reconstruction':
-        classifier = LSTM_Classifier(bb_dim=bb_dim, n_classes=args.n_class, rnn_type=args.rnn_type)
+        classifier = LSTM_Classifier(bb_dim=bb_dim, n_classes=args.n_class, rnn_type=args.rnn_type, num_layers=args.num_layers_classifier)
     else:
         if args.model_uncertainty == "NLE":
-            classifier = Classifier_with_uncertainty(bb_dim=bb_dim, n_classes=args.n_class)
+            classifier = Classifier_with_uncertainty(bb_dim=bb_dim, n_classes=args.n_class, num_layers=args.num_layers_classifier)
         else:
-            classifier = Classifier(bb_dim=bb_dim, n_classes=args.n_class)
+            classifier = Classifier(bb_dim=bb_dim, n_classes=args.n_class, num_layers=args.num_layers_classifier)
 
     classifier = classifier.to(DEVICE)
     return classifier
@@ -128,16 +141,36 @@ def setup_model_optm(args, DEVICE):
 
                 pretrained_model_dir = args.lincl_model_file.replace("_bnn", "").replace("_pretrained", ""). replace("_firstlast", "")
                 if os.path.isfile(pretrained_model_dir):
+                    #breakpoint()
                     state_dict = torch.load(pretrained_model_dir)["trained_backbone"]
                     print("Loading backbone from {}".format(pretrained_model_dir))
                 else:
                     raise ValueError("No pretrained model found at {}".format(pretrained_model_dir))
-                backbone = BayesianCorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length, state_dict=state_dict, bayesian_layers=bayesian_layers)
+                backbone = BayesianCorNET(n_channels=args.n_feature, 
+                                          n_classes=args.n_class, 
+                                          conv_kernels=args.num_kernels, 
+                                          kernel_size=args.kernel_size, 
+                                          LSTM_units=args.lstm_units, 
+                                          backbone=True, 
+                                          input_size=args.input_length, 
+                                          state_dict=state_dict, 
+                                          bayesian_layers=bayesian_layers, 
+                                          dropout=args.dropout_rate,
+                                          rnn_type=args.rnn_type)
             
             else: # no pretrained model
-                backbone = BayesianCorNET(n_channels=args.n_feature, n_classes=args.n_class, conv_kernels=args.num_kernels, kernel_size=args.kernel_size, LSTM_units=args.lstm_units, backbone=True, input_size=args.input_length, bayesian_layers=bayesian_layers)
+                backbone = BayesianCorNET(n_channels=args.n_feature, 
+                                          n_classes=args.n_class, 
+                                          conv_kernels=args.num_kernels, 
+                                          kernel_size=args.kernel_size, 
+                                          LSTM_units=args.lstm_units, 
+                                          backbone=True, 
+                                          input_size=args.input_length, 
+                                          bayesian_layers=bayesian_layers, 
+                                          dropout=args.dropout_rate,
+                                          rnn_type=args.rnn_type)
         else: # BNN, different architecure
-            NotImplementedError
+            raise NotImplementedError
     else: # no BNN
         if args.backbone == 'FCN':
             backbone = FCN(n_channels=args.n_feature, 
@@ -171,12 +204,12 @@ def setup_model_optm(args, DEVICE):
         elif args.backbone == 'CNN_AE':
             backbone = CNN_AE(n_channels=args.n_feature, 
                               n_classes=args.n_class, 
-                              embdedded_size=128, 
                               input_size=args.input_length, 
                               backbone=True, 
                               n_channels_out=args.n_channels_out, 
-                              dropout=0.0, 
-                              num_layers=2, 
+                              dropout=args.dropout_rate, 
+                              num_layers=3,
+                              pool_kernel_size=2,
                               kernel_size=args.kernel_size,
                               conv_kernels=args.num_kernels)
         elif args.backbone == 'Transformer':
@@ -231,11 +264,45 @@ def setup_model_optm(args, DEVICE):
                                 num_classes=args.n_class,
                                 backbone=True,)
         else:
-            NotImplementedError
+            raise NotImplementedError
 
+
+
+    # take the overall overall best parameters from "What Makes Good Contrastive Learning on Small-Scale Wearable-based Tasks?"
+    # paper for this framework
+    if args.framework == "byol":
+        args.lr_pretrain = 0.01
+        args.pretrain_batch_size = 64
+        args.weight_decay_pretrain = 1.5e-6
+        args.pretrain_n_epoch = 60
+    elif args.framework == "simsiam":
+        args.lr_pretrain = 3e-4
+        args.pretrain_batch_size = 256
+        args.weight_decay_pretrain = 1e-4
+        args.pretrain_n_epoch = 60
+    elif args.framework == "simclr":
+        args.pretrain_lr = 2.5e-3
+        args.pretrain_batch_size = 256
+        args.weight_decay_pretrain = 1e-6
+        args.pretrain_n_epoch = 120
+    elif args.framework == "nnclr":
+        args.lr_pretrain = 2e-3
+        args.pretrain_batch_size = 256
+        args.pretrain_weight_decay = 1e-6
+        args.pretrain_n_epoch = 120
+    elif args.framework == "tstcc":
+        args.lr_pretrain = 3e-4
+        args.pretrain_batch_size = 128
+        args.weight_decay_pretrain = 3e-4
+        args.pretrain_n_epoch = 40
+
+    
 
     # set up model and optimizers
     if args.framework in ['byol', 'simsiam']:
+
+
+
         model = BYOL(DEVICE, backbone, window_size=args.input_length, n_channels=args.n_feature, projection_size=args.p,
                      projection_hidden_size=args.phid, moving_average=args.EMA)
         optimizer1 = torch.optim.Adam(model.online_encoder.parameters(),
@@ -297,6 +364,7 @@ def setup_args(args):
     if args.model_uncertainty == "gaussian_classification":
         args.discretize_hr = True
         args.n_class = args.n_prob_class
+        args.loss = "CrossEntropy"
     elif args.model_uncertainty == "NLE":
         args.loss = "NLE"
         args.discretize_hr = False
@@ -310,7 +378,7 @@ def setup_args(args):
     else:
         assert args.loss == 'CrossEntropy'
 
-    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall", "max_v2", "max_hrv"]:
+    if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'capture24all', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall", "max_v2", "max_hrv"]:
         args.n_feature = 3
     
     if args.backbone == "Transformer":
@@ -378,6 +446,7 @@ def setup_args(args):
     lincl_model_name_opt += f"_hrmin_{args.hr_min}" if args.hr_min != 50 else ""
     lincl_model_name_opt += f"_hrmax_{args.hr_max}" if args.hr_max != 110 else ""
     lincl_model_name_opt += f"_rseed_{args.random_seed}" if args.random_seed != 10 else ""
+    lincl_model_name_opt += f"_nlayers_{args.num_layers_classifier}" if args.num_layers_classifier != 1 else ""
     lincl_model_name = 'lincls'+ lincl_model_name_opt + "_" + args.backbone + '_dataset_' + args.dataset + '_split' + str(args.split) + '_eps' + str(args.n_epoch) + '_bs' + str(args.batch_size) + "_bestmodel" + '.pt'
 
     args.lincl_model_file = os.path.join(args.model_dir_name, lincl_model_name)
@@ -424,7 +493,7 @@ def setup(args, DEVICE):
 
     schedulers = []
     for optimizer in optimizers:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.n_epoch, eta_min=0)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.pretrain_n_epoch, eta_min=0)
         schedulers.append(scheduler)
 
     global nn_replacer
@@ -563,7 +632,7 @@ def train(train_loader, val_loader, model, logger, DEVICE, optimizers, scheduler
     min_val_loss = 1e8
     num_epochs = args.n_epoch
 
-    for epoch in range(args.n_epoch):
+    for epoch in range(args.pretrain_n_epoch):
         total_loss = 0
         n_batches = 0
         model.train()
@@ -585,7 +654,7 @@ def train(train_loader, val_loader, model, logger, DEVICE, optimizers, scheduler
                     model.update_moving_average()
 
                 tepoch.set_postfix(pretrain_loss=loss.item())
-        wandb.log({'lr': optimizers[0].param_groups[0]['lr']}, step=epoch)
+        #wandb.log({'lr': optimizers[0].param_groups[0]['lr']}, step=epoch)
         
         for scheduler in schedulers:
             scheduler.step()
@@ -717,6 +786,7 @@ def calculate_lincls_output(sample, target, trained_backbone, criterion, args):
     if "bnn" in args.model_uncertainty:
         kl_loss = get_kl_loss(trained_backbone)/sample.shape[0]
         loss += kl_loss
+        predicted = output.data
     elif args.model_uncertainty == "NLE":
         #predicted = output[..., 0].data
         predicted = output[0].data
@@ -887,6 +957,18 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
                     "hr_pred": hr_pred,
                     "pid": pids
                     }) 
+        
+        # Logging results per participant id
+        results_per_pid = []
+        pids = np.array(pids)
+        for pid in np.unique(pids[:,0]):
+            hr_true_pid = np.array(hr_true)[np.where(pids[:,0] == pid)]
+            hr_pred_pid = np.array(hr_pred)[np.where(pids[:,1] == pid)]
+            mae_pid = np.abs(hr_true_pid - hr_pred_pid).mean()
+            corr_pid = corr(hr_true_pid, hr_pred_pid)
+            results_per_pid.append((pid, mae_pid, corr_pid))
+        wandb.log({"results_per_pid": wandb.Table(data=results_per_pid, columns=["pid", "MAE", "Corr"])})
+        
         hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
         
         figure = plot_true_pred(hr_true, hr_pred, x_lim=[args.hr_min, args.hr_max], y_lim=[args.hr_min, args.hr_max])
@@ -970,14 +1052,22 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
 def setup_postprocessing_model(args):
 
     if args.postprocessing == "beliefppg":
-        dim = args.n_prob_class
-        postprocessing_model = PriorLayer(
-                    dim, 
+        postprocessing_model = BeliefPPG(
+                    args.n_prob_class, 
                     min_hr=args.hr_min, 
                     max_hr=args.hr_max, 
                     is_online= False,
                     return_probs= True,
                     uncert = "entropy")
+
+    elif args.postprocessing == "raw":
+        postprocessing_model = Postprocessing(
+            args.n_prob_class, 
+            min_hr=args.hr_min, 
+            max_hr=args.hr_max, 
+            return_probs= True,
+            uncert = "entropy")
+
     else:
         raise NotImplementedError
     return postprocessing_model
@@ -994,3 +1084,87 @@ def train_postprocessing(train_loader, postprocessing_model, DEVICE, args):
     # Sometimes we get a Value Error here. This is because the probabilities for some classes are too small. Taking the log will then result in infinite values
     postprocessing_model.fit_layer(ys, distr=args.transition_distribution)
     return postprocessing_model.to(DEVICE)
+
+
+def predict_median(train_loader, val_loader, test_loader, args, mode="global"):
+
+    assert mode in ["global", "subject_wise"]
+
+    # predicts the meidan of the training HR values
+    wandb_run = wandb.init(
+    # Set the project where this run will be logged
+    project= args.wandb_project,
+    group = args.wandb_group if args.wandb_group != '' else None,
+    tags=[args.wandb_tag] if args.wandb_tag != '' else None,
+    # Track hyperparameters and run metadata
+    config=vars(args),
+    mode = args.wandb_mode)
+
+    if mode=="global":
+        for _, target, pid in train_loader:
+            target = convert_to_hr(target, args)
+            hr_true_train.extend(target.squeeze())
+        hr_true_train = np.array(hr_true_train)
+        hr_median = np.median(hr_true_train)
+        hr_pred_train = np.repeat(hr_median, len(hr_true_train))
+        mae_train = np.abs(hr_true_train - hr_pred_train).mean()
+        corr_train = corr(hr_true_train, hr_pred_train)
+        wandb.log({'Train_MAE': mae_train, 'Train_Corr': corr_train})
+
+        hr_true_val = []
+        for _,target, _ in val_loader:
+
+            target = convert_to_hr(target, args)
+            hr_true_val.extend(target.squeeze())
+
+        hr_true_val = np.array(hr_true_val)
+        hr_pred_val = np.repeat(hr_median, len(hr_true_val))
+        mae_train = np.abs(hr_true_val - hr_pred_val).mean()
+        corr_train = corr(hr_true_val, hr_pred_val)
+
+        wandb.log({'Val_MAE': mae_train, 'Val_Corr': corr_train})
+
+        hr_true_test = []
+
+        for _, target, _ in test_loader:
+            target = convert_to_hr(target, args)
+            hr_true_test.extend(target.squeeze())
+        
+        hr_true_test = np.array(hr_true_test)
+        hr_pred_test = np.repeat(hr_median, len(hr_true_test))
+        mae_train = np.abs(hr_true_test - hr_pred_test).mean()
+        corr_train = corr(hr_true_test, hr_pred_test)
+        
+        wandb.log({'Test_MAE': mae_train, 'Test_Corr': corr_train})
+
+    elif mode=="subject_wise":
+        for name, datalaoder in {"Train": train_loader, "Val": val_loader, "Test": test_loader}.items():
+            
+            targets, pids = [], []
+            for _, target, pid in datalaoder:
+                targets.extend(target.squeeze())
+                pids.extend(pid[:,0])
+            targets = np.array(targets)
+            pids = np.array(pids)
+            pid_unique = np.unique(pids)
+
+
+            hr_true, hr_pred = [], []
+            for pid in pid_unique:
+                target_pid = targets[pids == pid]
+                if len(target_pid) == 0:
+                    continue
+                hr_median = np.median(hr_true)
+                pred_pid = np.repeat(hr_median, len(target_pid))
+                hr_true.extend(target_pid)
+                hr_pred.extend(pred_pid)
+            hr_true = np.array(hr_true)
+            hr_pred = np.array(hr_pred)
+            mae = np.abs(hr_true - hr_pred).mean()
+            corr_val = corr(hr_true, hr_pred)
+            wandb.log({f'{name}_MAE': mae, f'{name}_Corr': corr_val})
+
+    wandb.finish()
+
+    
+
