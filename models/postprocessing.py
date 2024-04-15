@@ -6,12 +6,10 @@ from scipy.stats import laplace, norm
 
 class Postprocessing(nn.Module):
 
-    def __init__(self, dim, min_hr, max_hr, return_probs, uncert="std", method="raw"):
+    def __init__(self, dim, return_probs=True, uncert="std", method="raw"):
         """
         Construct the Prior Layer translating instantaneous bin probabilities into contextualized HR predictions.
         :param dim: number of bins
-        :param min_hr: minimal predictable frequency
-        :param max_hr: maximal predictable frequency
         :param return_probs: returns contextualized bin probabilities if set to True, HR estimates in BPM otherwise.
         :param uncert: The uncertainty measure to use. One of ["entropy", "std"].
         :param kwargs: passed to parent class
@@ -19,38 +17,26 @@ class Postprocessing(nn.Module):
         super(Postprocessing, self).__init__()
         self.dim = dim
         self.method = method
-        self.min_hr = min_hr
-        self.max_hr = max_hr
         self.return_probs = return_probs
         self.uncert = uncert
-        bins = np.array([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]])
+        bins = np.array([i for i in [-3/dim] + list(np.linspace(0, 1, dim-1)) + [1+3/dim]])
         bins = (bins[1:] + bins[:-1])/2
         self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
-        #self.bins = nn.Parameter(torch.tensor([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]], dtype=torch.float32), requires_grad=False)
-
-    def hr(self, i):
-        """
-        Helper function to calculate heart rate based on bin index
-        :param i: bin index
-        :param dim: number of bins
-        :return: heart rate in bpm
-        """
-        return self.min_hr + (self.max_hr - self.min_hr) * i / self.dim
 
 
     def fit_layer(self, ys, distr="laplace", sparse=False, learn_state_prior=False):
         pass
 
 
-    def forward(self, ps, method=None):
+    def forward(self, probs, preds, method=None):
         method = method or self.method
         if method == "raw":
             # return input
-            return self.forward_raw(ps)
+            return self.forward_raw(probs, preds)
         else:
             raise NotImplementedError(f"Unknown method: {method}")
         
-    def forward_raw(self, ps):
+    def forward_raw(self, probs, preds):
         """
         Returns the raw input probabilities.
         :param ps: tf.tensor of shape (n_samples, n_bins) containing probabilities
@@ -58,13 +44,13 @@ class Postprocessing(nn.Module):
                  E_x : tf.tensor of shape (n_samples,) containing the expected HR, only if return_probs=False
                  uncert : tf.tensor of shape (n_samples,) containing est. uncertainty of the prediction
         """
-        uncert = self._compute_uncertainty(ps)
-        E_x = self._compute_expectation(ps)
+        uncert = self._compute_uncertainty(probs)
+
         if self.return_probs:
-            return E_x, uncert, ps
+            return preds, uncert, probs
         else:
             
-            return E_x, uncert
+            return preds, uncert
 
     def _compute_expectation(self, probs):
         E_x = torch.sum(probs * self.bins[None, :], axis=1)
@@ -90,41 +76,28 @@ class BeliefPPG(Postprocessing):
      When added, the model produces either contextualized probabilities or BPM HR estimates as output.
     """
 
-    def __init__(self, dim, min_hr, max_hr, is_online, return_probs, uncert="entropy", method="sumprod"):
+    def __init__(self, dim, return_probs=True, uncert="std", method="sumprod"):
         """
         Construct the Prior Layer translating instantaneous bin probabilities into contextualized HR predictions.
         :param dim: number of bins
-        :param min_hr: minimal predictable frequency
-        :param max_hr: maximal predictable frequency
-        :param is_online: whether sum-product message passing (True) or viterbi decoding (False) should be applied
         :param return_probs: returns contextualized bin probabilities if set to True, HR estimates in BPM otherwise.
         :param uncert: The uncertainty measure to use. One of ["entropy", "std"].
         :param kwargs: passed to parent class
         """
-        super(Postprocessing, self).__init__()
+        super(BeliefPPG, self).__init__(dim, return_probs, uncert, method)
         self.state_prior = torch.tensor(np.ones(dim) / dim, dtype=torch.float32)
         self.state = nn.Parameter(self.state_prior.clone(), requires_grad=False)
-        self.dim = dim
-        self.method = method
+        #self.dim = dim
+        #self.method = method
         self.transition_prior = nn.Parameter(torch.zeros((self.dim, self.dim), dtype=torch.float32), requires_grad=False)
-        self.min_hr = min_hr
-        self.max_hr = max_hr
-        self.is_online = is_online
-        self.return_probs = return_probs
-        self.uncert = uncert
-        bins = np.array([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]])
-        bins = (bins[1:] + bins[:-1])/2
-        self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
-        #self.bins = nn.Parameter(torch.tensor([self.hr(i) for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]], dtype=torch.float32), requires_grad=False)
+        #self.return_probs = return_probs
+        #self.uncert = uncert
+        #bins = np.array([i for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]])
+        #bins = (bins[1:] + bins[:-1])/2
+        #self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
+        #self.bins = nn.Parameter(torch.tensor([i for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]], dtype=torch.float32), requires_grad=False)
 
-    def hr(self, i):
-        """
-        Helper function to calculate heart rate based on bin index
-        :param i: bin index
-        :param dim: number of bins
-        :return: heart rate in bpm
-        """
-        return self.min_hr + (self.max_hr - self.min_hr) * i / self.dim
+
 
     def _fit_distr(self, diffs, distr):
         """
@@ -168,7 +141,7 @@ class BeliefPPG(Postprocessing):
                         ) - laplace.cdf(abs(i - j) - 1, mu, sigma)
                     elif distr == "gauss":
                         log_diffs = [
-                            np.log(self.hr(i1)) - np.log(self.hr(i2))
+                            np.log(i1) - np.log(i2)
                             for i1 in (i - 0.5, i + 0.5)
                             for i2 in (j - 0.5, j + 0.5)
                         ]
@@ -204,15 +177,15 @@ class BeliefPPG(Postprocessing):
             output.append(self.state.clone().detach())
         return torch.stack(output)
 
-    def forward(self, ps, method=None):
+    def forward(self, probs, preds, method=None):
         method = method or self.method
         if method == "sumprod":
-            return self.forward_sumprod(ps)
+            return self.forward_sumprod(probs, preds)
         elif method == "viterbi":
-            return self.forward_viterbi(ps)
+            return self.forward_viterbi(probs, preds)
         elif method == "raw":
             # return input
-            return self.forward_raw(ps)
+            return self.forward_raw(probs, preds)
         else:
             raise NotImplementedError(f"Unknown method: {method}")
         
@@ -234,21 +207,21 @@ class BeliefPPG(Postprocessing):
         curr_maxprod *= curr
         return curr_maxprod / curr_maxprod.sum(), ixes
 
-    def forward_viterbi(self, raw_pred):
+    def forward_viterbi(self, probs, preds=None):
         """
         Performs Viterbi Decoding on the output probabilities.
         That is, uses max-product message passing to find the most likely HR trajectory according to the
         raw class probabilites.
-        :param raw_pred: np.ndarray of shape (n_timesteps, n_bins) of raw HR probabilities
+        :param probs: np.ndarray of shape (n_timesteps, n_bins) of raw HR probabilities
         :param prior_layer: PriorLayer that has already been fit to training data
         :return: np.ndarray of shape (n_timesteps, ) of predictions for each step
         """
 
         best_paths = []
-        prev_maxprod = torch.full((self.dim,), 1 / self.dim, dtype=torch.float32, device=raw_pred.device)
+        prev_maxprod = torch.full((self.dim,), 1 / self.dim, dtype=torch.float32, device=probs.device)
 
-        for j in range(len(raw_pred)):
-            prev_maxprod, paths = self._update_prob(prev_maxprod, raw_pred[j], self.transition_prior)
+        for j in range(len(probs)):
+            prev_maxprod, paths = self._update_prob(prev_maxprod, probs[j], self.transition_prior)
             best_paths.append(paths)
 
         best_path = []
@@ -260,11 +233,41 @@ class BeliefPPG(Postprocessing):
 
         best_path.append(curr_ix)
 
+        pred = torch.tensor([x for x in reversed(best_path)], dtype=torch.float32)
+
+        # for compatibility, we also return uncertainty, which is all 0 here
+        # also probability, which is simply the one-hot encoded prediction
+        uncertainty = torch.zeros(len(pred), dtype=torch.float32)
+
+
         if self.return_probs:
-            return torch.tensor([self.hr(x) for x in reversed(best_path)], dtype=torch.float32), None, None
+            probs = torch.zeros((len(pred), self.dim), dtype=torch.float32)
+            for i, ix in enumerate(best_path):
+                probs[i, ix] = 1.0
+            return pred, uncertainty, probs
 
-        return torch.tensor([self.hr(x) for x in reversed(best_path)], dtype=torch.float32), None
+        return pred, uncertainty
 
+    def forward_sumprod(self, probs, preds=None):
+        """
+        Calculates a stateful forward pass applying the transition prior (symbolically).
+        Assumes batch consists of consecutive samples. Overrides parent function.
+        :param probs: tf.tensor of shape (n_samples, n_bins) containing probabilities
+        :return: probs : tf.tensor of same shape, only returned if return_probs=True
+                 E_x : tf.tensor of shape (n_samples,) containing the expected HR, only if return_probs=False
+                 uncert : tf.tensor of shape (n_samples,) containing est. uncertainty of the prediction
+        """
+        probs = self._propagate_sumprod(probs)
+
+        E_x = self._compute_expectation(probs)
+
+        uncert = self._compute_uncertainty(probs)
+
+        if self.return_probs:
+            return E_x, uncert, probs
+        else:
+            return E_x, uncert
+        
     def get_config(self):
         """
         Helper function necessary to save model
@@ -272,10 +275,8 @@ class BeliefPPG(Postprocessing):
         """
         config = {
             "dim": self.dim,
-            "min_hr": self.min_hr,
-            "max_hr": self.max_hr,
-            "is_online": self.is_online,
             "return_probs": self.return_probs,
+            "method": self.method,
         }
         return config
     
@@ -297,40 +298,54 @@ class BeliefPPG(Postprocessing):
 
 
 
-
 from filterpy.kalman import KalmanFilter,rts_smoother
 from filterpy.common import Q_discrete_white_noise
 
-class KalmanSmoother():
-    def __init__(self, dt=8, noise=5, Q=1e-5):
-
+class KalmanSmoothing(Postprocessing):
+    def __init__(self, dim, step_size=8, noise=2, Q=1e-4, return_probs=True, uncert="std"):
+        super(KalmanSmoothing, self).__init__(dim, return_probs, uncert)
         self.fk = KalmanFilter(dim_x=2, dim_z=1)
-        self.fk.x = np.array([0.5, 0.])      # state (x and dx)
-        self.fk.F = np.array([[1., dt],
+        self.fk.x = np.array([0.5, 0.])      # initial state (x and dx)
+        self.fk.F = np.array([[1., step_size],
                             [0., 1.]])    # state transition matrix
         self.fk.H = np.array([[1., 0.]])    # Measurement function
         self.fk.P*= 100.                     # covariance matrix
         self.fk.R = noise                   # state uncertainty
-        self.fk.Q = Q_discrete_white_noise(dim=2, dt=dt, var=Q)  # process uncertainty
+        self.fk.Q = Q_discrete_white_noise(dim=2, dt=step_size, var=Q)  # process uncertainty
+
+        
     
     def smooth(self, zs):
         mu, cov, _, _ = self.fk.batch_filter(zs)
         M, p, C, _ = self.fk.rts_smoother(mu, cov)
-        return M
+        return M[:,0]
+    
+    def forward(self, probs, preds):
+
+        smoothed_expectation = self.smooth(preds)
+        uncertainty = np.zeros(len(smoothed_expectation))
+
+        uncertainty, smoothed_expectation = torch.tensor(uncertainty, dtype=torch.float32), torch.tensor(smoothed_expectation, dtype=torch.float32)
+
+        if self.return_probs:
+            probs = torch.zeros((len(smoothed_expectation), self.dim))
+            for i, x in enumerate(smoothed_expectation):
+                probs[i, int(x)] = 1
+            return smoothed_expectation, uncertainty, probs
+
+        return smoothed_expectation, uncertainty
     
 
 
 def test_PriorLayer():
     # Define parameters
     dim = 10
-    min_hr = 60
-    max_hr = 120
-    is_online = True
+
     return_probs = True
     uncert = "entropy"
 
     # Create an instance of PriorLayer
-    prior_layer = Postprocessing(dim, min_hr, max_hr, is_online, return_probs, uncert)
+    prior_layer = Postprocessing(dim, return_probs, uncert)
 
     # Generate random input data
     num_samples = 5

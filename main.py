@@ -91,7 +91,8 @@ def get_parser():
                         help='byol: projector hidden size, simsiam: predictor hidden size, simclr: na')
 
     # postprocessing
-    parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg', 'kalmansmoothing', 'raw'], help='postprocessing method')
+    # sumprod and beliefppg are the same, just for compatibility
+    parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg', 'kalmansmoothing', 'raw', 'sumprod', "viterbi"], help='postprocessing method')
     parser.add_argument('--transition_distribution', type=str, default='laplace', choices=['gauss', 'laplace'], help='transition distribution for belief ppg')
 
 
@@ -147,13 +148,13 @@ if __name__ == '__main__':
     # setup model, optimizer, scheduler, criterion, logger
     args = setup_args(args)
     initial_mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
-    train_loaders, val_loader, test_loader = setup_dataloaders(args, mode=initial_mode)
+    train_loader, val_loader, test_loader = setup_dataloaders(args, mode=initial_mode)
 
     if args.framework == "median":
-        predict_median(train_loaders, val_loader, test_loader, args, mode="global")
+        predict_median(train_loader, val_loader, test_loader, args, mode="global")
         exit()
     if args.framework == "subject_median":
-        predict_median(train_loaders, val_loader, test_loader, args, mode="subject_wise")
+        predict_median(train_loader, val_loader, test_loader, args, mode="subject_wise")
         exit()
         
 
@@ -171,9 +172,9 @@ if __name__ == '__main__':
 
     if args.pretrain: # pretraining
         # setup dataloader for pretraining
-        #train_loaders, val_loader, test_loader = setup_dataloaders(args, mode="pretraining")
+        #train_loader, val_loader, test_loader = setup_dataloaders(args, mode="pretraining")
         print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
-        pretrain_model_weights = train(train_loaders, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
+        pretrain_model_weights = train(train_loader, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
         model.load_state_dict(pretrain_model_weights)
 
         if len(test_loader) != 0:
@@ -202,7 +203,7 @@ if __name__ == '__main__':
 
         # setup dataloader for finetuning
         if initial_mode != 'finetuning':
-            train_loaders, val_loader, test_loader = setup_dataloaders(args, mode="finetuning")
+            train_loader, val_loader, test_loader = setup_dataloaders(args, mode="finetuning")
         print('device:', DEVICE, 'dataset:', args.dataset)
         
 
@@ -211,7 +212,7 @@ if __name__ == '__main__':
         optimizer_cls.param_groups[1]['lr'] = args.lr_finetune_lstm
         optimizer_cls.add_param_group({'params': trained_backbone.classifier.parameters(), 'lr': args.lr})
         
-        trained_backbone_weights = train_lincls(train_loaders, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, args)
+        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, args)
         trained_backbone.load_state_dict(trained_backbone_weights)
 
         if len(test_loader) != 0:

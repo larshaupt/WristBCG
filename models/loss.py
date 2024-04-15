@@ -64,3 +64,63 @@ class NTXentLoss(torch.nn.Module):
         loss = self.criterion(logits, labels)
 
         return loss / (2 * self.batch_size)
+
+
+
+class NLELoss(nn.Module):
+    def __init__(self, ratio=1.0):
+        super(NLELoss, self).__init__()
+        self.ratio = ratio
+
+    def forward(self, predicted_values, true_labels):
+        #log_uncertainties = predicted_values[..., 1]
+        #predicted_values = predicted_values[..., 0]
+        predicted_values, log_uncertainties = predicted_values
+        abs_diff = torch.abs(predicted_values - true_labels)
+        return torch.mean(abs_diff) * self.ratio + torch.mean(abs_diff * torch.exp(-log_uncertainties) + log_uncertainties) * (1 - self.ratio)
+        #return torch.mean(torch.abs(predicted_values - true_labels) / log_uncertainties + torch.log(2*log_uncertainties))
+
+
+def ece_loss(y_true, y_pred, bins=10):
+
+    """
+    Calculate the Expected Calibration Error (ECE) between predicted probabilities and true labels.
+
+    ECE measures the discrepancy between predicted probabilities (y_pred) and empirical accuracy (y_true).
+
+    Parameters:
+    y_true (array-like): True labels. Each row corresponds to a sample, and each column corresponds to a class.
+    y_pred (array-like): Predicted probabilities. Each row corresponds to a sample, and each column corresponds to a class.
+    bins (int, optional): Number of equally spaced bins for dividing the range of predicted probabilities. Default is 10.
+
+    Returns:
+    float: The Expected Calibration Error (ECE) value.
+
+    Notes:
+    - The best possible value of ECE is 0, indicating perfect calibration.
+    - The worst possible value of ECE is 1, indicating complete miscalibration.
+    """
+        
+    bin_boundaries = np.linspace(0, 1, bins + 1)
+    bin_lowers = bin_boundaries[:-1]
+    bin_uppers = bin_boundaries[1:]
+
+    confidences = np.max(y_pred, axis=1)
+    
+    #accuracies = y_true[np.arange(len(y_true)), np.argmax(y_pred, axis=1)]
+    accuracies = np.argmax(y_true, axis=1) == np.argmax(y_pred, axis=1)
+    ece = 0
+    for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+        in_bin = (confidences > bin_lower) & (confidences < bin_upper)
+        prop_in_bin = in_bin.mean()
+        if prop_in_bin > 0:
+            accuracy_in_bin = accuracies[in_bin].mean()
+            avg_confidence_in_bin = confidences[in_bin].mean()
+            ece += np.abs(accuracy_in_bin - avg_confidence_in_bin) * prop_in_bin
+    return ece
+
+
+def nll_loss(y_true, y_pred):
+    log_pred = np.log(y_pred[np.arange(len(y_true)), np.argmax(y_true, axis=1)])
+    log_pred[log_pred == -np.inf] = 0
+    return -np.mean(log_pred)

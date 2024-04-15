@@ -10,7 +10,7 @@ from models.frameworks import *
 
 from models.backbones import *
 from models.loss import *
-from models.postprocessing import Postprocessing, BeliefPPG
+from models.postprocessing import Postprocessing, BeliefPPG, KalmanSmoothing
 from data_preprocess import data_preprocess_hr
 from torchmetrics.regression import LogCoshError
 from bayesian_torch.models.dnn_to_bnn import get_kl_loss
@@ -34,7 +34,7 @@ plot_dir_name = 'plot'
 if not os.path.exists(plot_dir_name):
     os.makedirs(plot_dir_name)
 
-def corr(a,b):
+def corr_function(a,b):
     corr = pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
     if np.isnan(corr):
         return 0
@@ -45,7 +45,7 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     figure = plt.figure(figsize=(8, 8))
     hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
     mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
-    correlation_coefficient = corr(hr_true, hr_pred)
+    correlation_coefficient = corr_function(hr_true, hr_pred)
 
     plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae:.2f}, Corr: {correlation_coefficient:.2f}")
 
@@ -435,7 +435,7 @@ def setup_args(args):
     args.pretrain_model_file = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name  + "_bestmodel" + '.pt')
 
     lincl_model_name_opt = ""
-    lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty != "none" else ""
+    lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty not in ["none", "mcdropout"] else ""
     lincl_model_name_opt += f"_trainranked_{args.subsample_ranked_train}" if args.subsample_ranked_train not in [None, 0.0] else ""
     lincl_model_name_opt += f"_subsample_{args.subsample:.3f}" if args.subsample != 1 else ""
     lincl_model_name_opt += f"_timesplit" if args.split_by == "time" else ""
@@ -558,18 +558,6 @@ def setup_classifier(args, DEVICE, backbone):
     return classifier, criterion_cls, optimizer_cls
 
 
-class NLELoss(nn.Module):
-    def __init__(self, ratio=1.0):
-        super(NLELoss, self).__init__()
-        self.ratio = ratio
-
-    def forward(self, predicted_values, true_labels):
-        #log_uncertainties = predicted_values[..., 1]
-        #predicted_values = predicted_values[..., 0]
-        predicted_values, log_uncertainties = predicted_values
-        abs_diff = torch.abs(predicted_values - true_labels)
-        return torch.mean(abs_diff) * self.ratio + torch.mean(abs_diff * torch.exp(-log_uncertainties) + log_uncertainties) * (1 - self.ratio)
-        #return torch.mean(torch.abs(predicted_values - true_labels) / log_uncertainties + torch.log(2*log_uncertainties))
 
 
 
@@ -801,15 +789,20 @@ def add_probability_wrapper(model, args, DEVICE):
 
     if args.model_uncertainty == "mcdropout":
         model = MC_Dropout_Wrapper(model, n_classes = args.n_prob_class, n_samples = 100)
-        model = model.to(DEVICE)
+        
     elif args.model_uncertainty in ["bnn", "bnn_pretrained", "bnn_pretrained_firstlast"]:
         model = BNN_Wrapper(model, n_classes=args.n_prob_class, n_samples=100)
-        model = model.to(DEVICE)
+
     elif args.model_uncertainty == "NLE":
         model = NLE_Wrapper(model, n_classes=args.n_prob_class)
-    else:
-        model = Uncertainty_Wrapper(model, n_classes=args.n_prob_class)
-        model = model.to(DEVICE)
+
+    elif args.model_uncertainty == "gaussian_classification":    
+        model = Uncertainty_Wrapper(model, n_classes=args.n_prob_class, return_probs=True)
+
+    else: # simple regression
+        model = Uncertainty_Regression_Wrapper(model, n_classes=args.n_prob_class, return_probs=True)
+
+    model = model.to(DEVICE)
 
     return model
 
@@ -864,7 +857,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
         hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
         mae_train = np.abs(hr_true - hr_pred).mean()
         train_loss = total_loss / n_batches
-        corr_train = corr(hr_true, hr_pred)
+        corr_train = corr_function(hr_true, hr_pred)
         #model_dir = os.path.join(args.model_dir_name, 'lincls_' + args.model_name + '_' + args.dataset + "_split" + str(args.split) + "_" + str(epoch) + '.pt')
         #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
         #torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': classifier.state_dict()}, model_dir)
@@ -902,7 +895,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                         pids.extend(domain.cpu().numpy().squeeze())
                 hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
                 mae_val = np.abs(hr_true - hr_pred).mean()
-                corr_val = corr(hr_true, hr_pred)
+                corr_val = corr_function(hr_true, hr_pred)
                 val_loss = total_loss / n_batches
 
                 logging_table = pd.DataFrame({ 
@@ -965,7 +958,7 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
             hr_true_pid = np.array(hr_true)[np.where(pids[:,0] == pid)]
             hr_pred_pid = np.array(hr_pred)[np.where(pids[:,1] == pid)]
             mae_pid = np.abs(hr_true_pid - hr_pred_pid).mean()
-            corr_pid = corr(hr_true_pid, hr_pred_pid)
+            corr_pid = corr_function(hr_true_pid, hr_pred_pid)
             results_per_pid.append((pid, mae_pid, corr_pid))
         wandb.log({"results_per_pid": wandb.Table(data=results_per_pid, columns=["pid", "MAE", "Corr"])})
         
@@ -975,12 +968,11 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
         wandb.log({"true_pred_test": figure})
         
         mae_test = np.abs(hr_true - hr_pred).mean()
-        corr_val = corr(hr_true, hr_pred)
+        corr_val = corr_function(hr_true, hr_pred)
         wandb.log({'Test_Loss': total_loss, 'Test_MAE': mae_test, "Test_Corr": corr_val})
         logger.debug(f'Test Loss     : {total_loss:.4f}, Test MAE     : {mae_test:.4f}, Test Corr     : {corr_val:.4f}\n')
         print('Saving results to {}'.format(args.model_dir_name))
         logging_table.to_pickle(os.path.join(args.model_dir_name, args.lincl_model_file.replace(".pt", f"_test.pickle")))
-
 
 
     if plt:
@@ -989,84 +981,96 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
         print('plots saved to ', plot_dir_name)
 
 def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, criterion_cls, args, plt=False, prefix="Test"):
-    hr_true, hr_pred, hr_pred_sumprod, hr_pred_viterbi, pids, uncertainties, probs, probs_sumprod = [], [], [], [], [], [], [], []
-    total = 0
+    hr_true, hr_pred, hr_pred_post, pids, uncertainties, probs, probs_post, target_probs = [], [], [], [], [], [], [], []
     total_loss = 0
     with torch.no_grad():
         model.eval()
         with tqdm(test_loader, desc=f"{prefix} Postprocessing", unit='batch') as tepoch:
             for idx, (sample, target, domain) in enumerate(tepoch):
-                total += 1
-                sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(target.shape[0], -1)
+                sample, target = sample.to(DEVICE).float(), target.float().reshape(target.shape[0], -1)
                 pred, x, prob = model(sample)
-                predicted_sumprod, uncertainty_sumprod, prob_sumprod = postprocessing(prob, method = "sumprod")
-                predicted_hr_viterbi, _, _ = postprocessing(prob, method = "viterbi")
+                pred, prob = pred.cpu(), prob.cpu()
+                # if deterministic model, uncertainty will be 0 for all values, prob_post will be one-hot encoding of pred_post
+                pred_post, uncertainty, prob_post = postprocessing(prob, pred)
 
                 loss = criterion_cls(prob, target)
                 total_loss += loss.item()
 
-                predicted_hr_sumprod = convert_to_hr(prob_sumprod, args)
+                predicted_hr_post = convert_to_hr(pred_post, args)
                 predicted_hr = convert_to_hr(pred, args)
                 target_hr = convert_to_hr(target, args)
 
+
                 hr_true.extend(target_hr.reshape(-1))
                 hr_pred.extend(predicted_hr.reshape(-1))
-                hr_pred_sumprod.extend(predicted_hr_sumprod.reshape(-1))
-                hr_pred_viterbi.extend(predicted_hr_viterbi.reshape(-1))
-                pids.extend(domain.cpu().numpy().reshape(-1, 2))
-                uncertainties.extend(uncertainty_sumprod.cpu().numpy().reshape(-1))
+                hr_pred_post.extend(predicted_hr_post.reshape(-1))
+                pids.extend(domain.numpy().reshape(-1, 2))
+                uncertainties.extend(uncertainty.numpy().reshape(-1))
+                target_probs.extend(target.numpy().reshape(-1, args.n_prob_class))
 
-                if args.save_probabilities:
-                    probs_sumprod.extend(prob_sumprod.cpu().numpy().reshape(-1, args.n_prob_class))
-                    probs.extend(prob.cpu().numpy().reshape(-1, args.n_prob_class))
+                probs_post.extend(prob_post.numpy().reshape(-1, args.n_prob_class))
+                probs.extend(prob.numpy().reshape(-1, args.n_prob_class))
 
         
             logging_table = { 
                         "hr_true": hr_true, 
                         "hr_pred": hr_pred,
-                        "hr_pred_sumprod": hr_pred_sumprod,
-                        "hr_pred_viterbi": hr_pred_viterbi,
+                        "hr_pred_post": hr_pred_post,
                         "pid": pids,
                         "uncertainty": uncertainties,
                         }
             if args.save_probabilities:
-                logging_table["probs_sumprod"] = probs_sumprod
+                logging_table["probs_post"] = probs_post
                 logging_table["probs"] = probs
 
-            hr_true, hr_pred, hr_pred_viterbi, hr_pred_sumprod = np.array(hr_true), np.array(hr_pred), np.array(hr_pred_viterbi), np.array(hr_pred_sumprod)
-            
+            hr_true, hr_pred, hr_pred_post, probs, probs_post, target_probs = np.array(hr_true), np.array(hr_pred), np.array(hr_pred_post), np.array(probs), np.array(probs_post), np.array(target_probs)
+            total_loss = total_loss / len(test_loader)
             figure = plot_true_pred(hr_true, hr_pred, x_lim=[args.hr_min, args.hr_max], y_lim=[args.hr_min, args.hr_max])
             wandb.log({f"true_pred_{prefix}_post": figure})
             
-            mae_test = np.abs(hr_true - hr_pred).mean()
-            mae_test_sumprod = np.abs(hr_true - hr_pred_sumprod).mean()
-            mae_test_viterbi = np.abs(hr_true - hr_pred_viterbi).mean()
-            corr_val = corr(hr_true, hr_pred)
-            corr_val_sumprod = corr(hr_true, hr_pred_sumprod)
-            corr_val_viterbi = corr(hr_true, hr_pred_viterbi)
-            wandb.log({f'Post_{prefix}_Loss': total_loss, f'Post_{prefix}_MAE': mae_test, f"Post_{prefix}_Corr": corr_val, f"Post_{prefix}_MAE_Viterbi": mae_test_viterbi, f"Post_{prefix}_Corr_Viterbi": corr_val_viterbi, f"Post_{prefix}_MAE_Sumprod": mae_test_sumprod, f"Post_{prefix}_Corr_Sumprod": corr_val_sumprod})
-            logger.debug(f'Post {prefix} Loss     : {total_loss:.4f}, Post {prefix} MAE     : {mae_test:.4f}, Post {prefix} Corr     : {corr_val:.4f}, Post {prefix} MAE Viterbi     : {mae_test_viterbi:.4f}, Post {prefix} Corr Viterbi     : {corr_val_viterbi:.4f}, Post {prefix} MAE Sumprod     : {mae_test_sumprod:.4f}, Post {prefix} Corr Sumprod     : {corr_val_sumprod:.4f}\n')
+            mae = np.abs(hr_true - hr_pred).mean()
+            mae_post = np.abs(hr_true - hr_pred_post).mean()
+            corr = corr_function(hr_true, hr_pred)
+            corr_post = corr_function(hr_true, hr_pred_post)
+            ece = ece_loss(probs, target_probs)
+            nll = nll_loss(probs, target_probs)
+            ece_post = ece_loss(probs_post, target_probs)
+            nll_post = nll_loss(probs_post, target_probs)
+            wandb.log({f'{prefix}_Loss': total_loss, f'{prefix}_MAE': mae, f"{prefix}_Corr": corr, f"Post_{prefix}_MAE": mae_post, f"Post_{prefix}_Corr_Post": corr_post, f"{prefix}_ECE": ece, f"{prefix}_NLL": nll, f"Post_{prefix}_ECE": ece_post, f"Post_{prefix}_NLL": nll_post})
+            logger.debug(f'{prefix} Loss     : {total_loss:.4f}, {prefix} MAE     : {mae:.4f}, {prefix} Corr     : {corr:.4f}, Post {prefix} MAE   : {mae_post:.4f}, Post {prefix} Corr   : {corr_post:.4f}   ECE: {ece:.4f}, NLL: {nll:.4f}, Post ECE: {ece_post:.4f}, Post NLL: {nll_post:.4f}\n')
             print('Saving results to {}'.format(args.model_dir_name))
-            pd.DataFrame(logging_table).to_pickle(os.path.join(args.model_dir_name, args.lincl_model_file.replace(".pt", f"{prefix}_postprocessing.pickle")))
+            pd.DataFrame(logging_table).to_pickle(os.path.join(args.model_dir_name, args.lincl_model_file.replace(".pt", f"{prefix}_{args.model_uncertainty}_{args.postprocessing}.pickle")))
 
 def setup_postprocessing_model(args):
 
-    if args.postprocessing == "beliefppg":
+    if args.postprocessing == "beliefppg" or args.postprocessing == "sumprod":
         postprocessing_model = BeliefPPG(
                     args.n_prob_class, 
-                    min_hr=args.hr_min, 
-                    max_hr=args.hr_max, 
-                    is_online= False,
                     return_probs= True,
-                    uncert = "entropy")
+                    uncert = "std",
+                    method="sumprod")
+        
+    elif args.postprocessing == "viterbi":
+        postprocessing_model = BeliefPPG(
+            args.n_prob_class, 
+            return_probs= True,
+            uncert = "std",
+            method="viterbi")
 
     elif args.postprocessing == "raw":
         postprocessing_model = Postprocessing(
             args.n_prob_class, 
-            min_hr=args.hr_min, 
-            max_hr=args.hr_max, 
             return_probs= True,
-            uncert = "entropy")
+            uncert = "std")
+        
+
+    elif args.postprocessing == "kalmansmoothing":
+        postprocessing_model = KalmanSmoothing(
+            args.n_prob_class, 
+            return_probs= True,
+            uncert = "std",
+            step_size=args.step_size,)
+
 
     else:
         raise NotImplementedError
@@ -1083,7 +1087,7 @@ def train_postprocessing(train_loader, postprocessing_model, DEVICE, args):
     ys = [target for _, target, _ in train_loader]
     # Sometimes we get a Value Error here. This is because the probabilities for some classes are too small. Taking the log will then result in infinite values
     postprocessing_model.fit_layer(ys, distr=args.transition_distribution)
-    return postprocessing_model.to(DEVICE)
+    return postprocessing_model
 
 
 def predict_median(train_loader, val_loader, test_loader, args, mode="global"):
@@ -1108,7 +1112,7 @@ def predict_median(train_loader, val_loader, test_loader, args, mode="global"):
         hr_median = np.median(hr_true_train)
         hr_pred_train = np.repeat(hr_median, len(hr_true_train))
         mae_train = np.abs(hr_true_train - hr_pred_train).mean()
-        corr_train = corr(hr_true_train, hr_pred_train)
+        corr_train = corr_function(hr_true_train, hr_pred_train)
         wandb.log({'Train_MAE': mae_train, 'Train_Corr': corr_train})
 
         hr_true_val = []
@@ -1120,7 +1124,7 @@ def predict_median(train_loader, val_loader, test_loader, args, mode="global"):
         hr_true_val = np.array(hr_true_val)
         hr_pred_val = np.repeat(hr_median, len(hr_true_val))
         mae_train = np.abs(hr_true_val - hr_pred_val).mean()
-        corr_train = corr(hr_true_val, hr_pred_val)
+        corr_train = corr_function(hr_true_val, hr_pred_val)
 
         wandb.log({'Val_MAE': mae_train, 'Val_Corr': corr_train})
 
@@ -1133,7 +1137,7 @@ def predict_median(train_loader, val_loader, test_loader, args, mode="global"):
         hr_true_test = np.array(hr_true_test)
         hr_pred_test = np.repeat(hr_median, len(hr_true_test))
         mae_train = np.abs(hr_true_test - hr_pred_test).mean()
-        corr_train = corr(hr_true_test, hr_pred_test)
+        corr_train = corr_function(hr_true_test, hr_pred_test)
         
         wandb.log({'Test_MAE': mae_train, 'Test_Corr': corr_train})
 
@@ -1161,7 +1165,7 @@ def predict_median(train_loader, val_loader, test_loader, args, mode="global"):
             hr_true = np.array(hr_true)
             hr_pred = np.array(hr_pred)
             mae = np.abs(hr_true - hr_pred).mean()
-            corr_val = corr(hr_true, hr_pred)
+            corr_val = corr_function(hr_true, hr_pred)
             wandb.log({f'{name}_MAE': mae, f'{name}_Corr': corr_val})
 
     wandb.finish()

@@ -950,7 +950,7 @@ class Classifier_with_uncertainty(nn.Module):
     
     
 class Uncertainty_Wrapper(nn.Module):
-    def __init__(self, base_model, n_classes, return_probs=False, uncertainty_model="std"):
+    def __init__(self, base_model, n_classes, return_probs=True, uncertainty_model="std"):
         super(Uncertainty_Wrapper, self).__init__()
 
         if hasattr(base_model, 'classifier'):
@@ -976,12 +976,12 @@ class Uncertainty_Wrapper(nn.Module):
         return expectation, uncertainty
 
     def _compute_uncertainty(self, probs):
-        probs = probs.detach().cpu()
+        
         if self.uncertainty_model == 'entropy':
             return -torch.sum(probs * torch.log(probs), dim=1)
         elif self.uncertainty_model == 'std':
-            bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
-            bins = np.mean([bins[1:], bins[:-1]], axis=0)
+            bins = torch.tensor(np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes), device=probs.device)
+            bins = torch.diff(bins) / 2 + bins[:-1]
             E_x = torch.sum(probs * bins[None, :], axis=1)
             E_x2 = torch.sum(probs * bins[None, :] ** 2, axis=1)
             return torch.sqrt(E_x2 - E_x**2)
@@ -990,14 +990,35 @@ class Uncertainty_Wrapper(nn.Module):
         
 
     def _compute_expectation(self, probs):
-        bins = np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes)
+        
+        bins = torch.tensor(np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes), device=probs.device)
         bin_length = bins[1:] - bins[:-1]
-        bins_mean = np.mean([bins[1:], bins[:-1]], axis=0)
+        bins = torch.diff(bins) / 2 + bins[:-1]
+        new_probs = probs * bin_length
+        new_probs = new_probs / new_probs.sum(axis=1, keepdims=True)
+        return torch.sum(new_probs * bins  , axis=1)
         
-        return torch.sum(probs * bins_mean * bin_length , axis=1) / bin_length.sum()
+
+class Uncertainty_Regression_Wrapper(Uncertainty_Wrapper):
+    def __init__(self, base_model, n_classes, return_probs=True, uncertainty_model="std"):
+        super(Uncertainty_Regression_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_probs=return_probs, uncertainty_model=uncertainty_model)
+    def forward(self, x):
+        preds, feat = self.base_model(x)
+        uncertainty = torch.zeros_like(preds)
+        expectation = preds
+        if self.return_probs:
+            pred_indices = torch.searchsorted(torch.tensor(self.bins).to(preds.device), preds)
+            probs = torch.zeros((preds.shape[0], self.bins.shape[0] - 1))
+            for i in range(preds.shape[0]):
+                probs[i, pred_indices[i]] = 1
+            return expectation, uncertainty, probs
         
+        return expectation, uncertainty
+    
+
+
 class NLE_Wrapper(Uncertainty_Wrapper):
-    def __init__(self, base_model, n_classes, return_probs=False, uncertainty_model="variance"):
+    def __init__(self, base_model, n_classes, return_probs=True, uncertainty_model="variance"):
         super(NLE_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_probs=return_probs, uncertainty_model=uncertainty_model)
         assert self.uncertainty_model == 'variance', 'NLE only supports variance as uncertainty model'
         self.bins = torch.Tensor(self.bins)
