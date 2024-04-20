@@ -967,15 +967,15 @@ class Uncertainty_Wrapper(nn.Module):
     def forward(self, x):
 
         probs, feat = self.base_model(x)
-        uncertainty = self._compute_uncertainty(probs)
-        expectation = self._compute_expectation(probs)
+        uncertainty = self._compute_uncertainty_from_probs(probs)
+        expectation = self._compute_expectation_from_probs(probs)
         if self.return_probs:
             
             return expectation, uncertainty,  probs
         
         return expectation, uncertainty
 
-    def _compute_uncertainty(self, probs):
+    def _compute_uncertainty_from_probs(self, probs):
         
         if self.uncertainty_model == 'entropy':
             return -torch.sum(probs * torch.log(probs), dim=1)
@@ -989,7 +989,7 @@ class Uncertainty_Wrapper(nn.Module):
             raise NotImplementedError
         
 
-    def _compute_expectation(self, probs):
+    def _compute_expectation_from_probs(self, probs):
         
         bins = torch.tensor(np.clip(self.bins, -3/self.n_classes, 1 + 3/self.n_classes), device=probs.device)
         bin_length = bins[1:] - bins[:-1]
@@ -997,7 +997,15 @@ class Uncertainty_Wrapper(nn.Module):
         new_probs = probs * bin_length
         new_probs = new_probs / new_probs.sum(axis=1, keepdims=True)
         return torch.sum(new_probs * bins  , axis=1)
-        
+    
+    def _compute_expectation_from_samples(self, samples):
+        return samples.mean(axis=1)
+
+    def _compute_uncertainty_from_samples(self, samples):
+        if self.uncertainty_model == "entropy":
+            raise NotImplementedError
+        else:
+            return samples.std(axis=1)
 
 class Uncertainty_Regression_Wrapper(Uncertainty_Wrapper):
     def __init__(self, base_model, n_classes, return_probs=True, uncertainty_model="std"):
@@ -1015,12 +1023,35 @@ class Uncertainty_Regression_Wrapper(Uncertainty_Wrapper):
         
         return expectation, uncertainty
     
+class Ensemble_Wrapper(Uncertainty_Wrapper):
+    def __init__(self, base_model, model_paths, n_classes, return_probs=True, uncertainty_model="std"):
+        super(Ensemble_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_probs=return_probs, uncertainty_model=uncertainty_model)
+        self.model_paths = model_paths
+        self.n_samples = len(model_paths)
+
+    def forward(self, x):
+        out_samples = []
+        for model_path in self.model_paths:
+            self.base_model.load_state_dict(torch.load(model_path)['trained_backbone'])
+            self.base_model.eval()
+            out_samples.append(self.base_model(x)[0])
+
+        out_samples = torch.cat(out_samples, dim=1)
+        # Calculate mean and uncertainty
+        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples.cpu().numpy()), dtype=x.dtype)
+        uncertainty = self._compute_uncertainty_from_samples(out_samples)
+        expectation = self._compute_expectation_from_samples(out_samples)
+        if self.return_probs:
+            return expectation, uncertainty, probs
+        
+        return expectation, uncertainty
+
 
 
 class NLE_Wrapper(Uncertainty_Wrapper):
-    def __init__(self, base_model, n_classes, return_probs=True, uncertainty_model="variance"):
+    def __init__(self, base_model, n_classes, return_probs=True, uncertainty_model="std"):
         super(NLE_Wrapper, self).__init__(base_model=base_model, n_classes=n_classes, return_probs=return_probs, uncertainty_model=uncertainty_model)
-        assert self.uncertainty_model == 'variance', 'NLE only supports variance as uncertainty model'
+        assert self.uncertainty_model == 'std', 'NLE only supports variance as uncertainty model'
         self.bins = torch.Tensor(self.bins)
     def forward(self, x):
         out, feat = self.base_model(x)
@@ -1082,14 +1113,14 @@ class MC_Dropout_Wrapper(Uncertainty_Wrapper):
             out_samples.append(out_sample)
 
         # Stack the results along a new dimension
-        out_samples = torch.cat(out_samples, dim=1).cpu().numpy()
+        out_samples = torch.cat(out_samples, dim=1)
 
         # Calculate mean and uncertainty
-        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
+        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples.cpu().numpy()), dtype=x.dtype)
         probs = probs.to(x.device)
 
-        uncertainty = self._compute_uncertainty(probs)
-        expectation = self._compute_expectation(probs)
+        uncertainty = self._compute_uncertainty_from_samples(out_samples)
+        expectation = self._compute_expectation_from_samples(out_samples)
 
         if self.return_probs:
             return expectation, uncertainty, probs
@@ -1111,13 +1142,13 @@ class BNN_Wrapper(Uncertainty_Wrapper):
             out_samples.append(out_sample)
 
         # Stack the results along a new dimension
-        out_samples = torch.cat(out_samples, dim=1).cpu().numpy()
+        out_samples = torch.cat(out_samples, dim=1)
 
         # Calculate mean and uncertainty
-        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples), dtype=x.dtype)
+        probs = torch.tensor(np.apply_along_axis(lambda x: np.histogram(x, bins=self.bins,density=False)[0]/self.n_samples, 1, out_samples.cpu().numpy()), dtype=x.dtype)
         probs = probs.to(x.device)
-        uncertainty = self._compute_uncertainty(probs)
-        expectation = self._compute_expectation(probs)
+        uncertainty = self._compute_uncertainty_from_samples(out_samples)
+        expectation = self._compute_expectation_from_samples(out_samples)
         if self.return_probs:
             
             return expectation, uncertainty, probs

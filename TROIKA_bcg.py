@@ -30,65 +30,48 @@ def ssa(ts: np.ndarray, L: int, perform_grouping: bool = True, wcorr_threshold: 
         grouping : bool, default=True
             If True, perform grouping based on the w-correlations of the deconstructed time series
             using agglomerative hierarchical clustering with single linkage.
-            If this parameter is True, the parameter distance_threshold must be set.
         wcorr_threshold : float, default=0.3
             The w-correlation threshold used with the agglomerative hierarchical clustering.
-            Time series with at least this w-correlation will be grouped together.
-            This parameter will be ignored if grouping is set to False.
         ret_Wcorr : bool, default=False
             Whether the resulting w-correlation matrix should be returned.
-            If grouping is enabled, return the w-correlation matrix of the grouped time series.
-            If grouping is disabled, return the w-correlation matrix of the ungrouped time series.
         
 
     Returns
     ----------
         Y : ndarray of shape (n_groups, n_timestamps) if grouping is enabled and (L, n_timestamps) if it is disabled.
         Wcorr : ndarray
-            The Wcorrelation matrix.
+            The w-correlation matrix.
             Wcorr will only be returned if ret_Wcorr is True
     """
 
-
-
     N = len(ts)
     K = N - L + 1
-    L_trajectory_matrix = hankel(ts[:L], ts[L-1:]) # (L, K)
-    U, Sigma, V = np.linalg.svd(L_trajectory_matrix, full_matrices=False) # (L, L); (d, ); (K, K)
+    L_trajectory_matrix = hankel(ts[:L], ts[L-1:])  # (L, K)
 
-    V = V.T # (K, K)
+    U, Sigma, V = np.linalg.svd(L_trajectory_matrix, full_matrices=False)  # (L, L); (d, ); (K, K)
+
+    V = V.T  # (K, K)
     d = len(Sigma)
 
 
     deconstructed_ts = []
     for i in range(d):
-
-        X_elem = np.array(Sigma[i] * np.outer(U[:,i], V[:,i])) # (L, K)
-        X_elem_rev = X_elem[::-1] # (L, K)
+        X_elem = np.array(Sigma[i] * np.outer(U[:, i], V[:, i]))  # (L, K)
+        X_elem_rev = X_elem[::-1]  # (L, K)
         ts_i = np.array([X_elem_rev.diagonal(i).mean() for i in range(-L+1, K)])
         deconstructed_ts.append(ts_i)
-    deconstructed_ts = np.array(deconstructed_ts) # (d, L, K)
-    
+    deconstructed_ts = np.array(deconstructed_ts)  # (d, N)
+
     if not perform_grouping and not ret_Wcorr:
         return deconstructed_ts
-    
 
-    w = np.concatenate((np.arange(1, L+1), np.full((K-L,), L), np.arange(L-1, 0, -1)))
-    def wcorr(ts1: np.ndarray, ts2: np.ndarray) -> float:
-        """
-        weighted correlation of ts1 and ts2.
-        w is precomputed for reuse.
-        """
-        w_covar = (w * ts1 * ts2).sum()
-        ts1_w_norm = np.sqrt((w * ts1 * ts1).sum())
-        ts2_w_norm = np.sqrt((w * ts2 * ts2).sum())
-        
-        return w_covar / (ts1_w_norm * ts2_w_norm)
 
-    Wcorr_mat = pairwise_distances(deconstructed_ts, metric=wcorr)
+    w = np.concatenate((np.arange(1, L + 1), np.full((K - L,), L), np.arange(L - 1, 0, -1)))
+    Wcorr_mat = pairwise_distances(deconstructed_ts, metric=lambda x, y: np.dot(w*x, y) / (np.linalg.norm(w*x) * np.linalg.norm(w*y)))
 
     if not perform_grouping:
         return deconstructed_ts, Wcorr_mat
+
 
     Wcorr_mat_dist = 1 - Wcorr_mat
     distance_threshold = 1 - wcorr_threshold
@@ -96,16 +79,17 @@ def ssa(ts: np.ndarray, L: int, perform_grouping: bool = True, wcorr_threshold: 
                                         distance_threshold=distance_threshold, n_clusters=None)
     clust_labels = agg_clust.fit_predict(Wcorr_mat_dist)
     n_clusters = clust_labels.max() + 1
-    grouped_ts = [np.sum(deconstructed_ts[clust_labels == cluster_id], axis=0) 
+    grouped_ts = [np.sum(deconstructed_ts[clust_labels == cluster_id], axis=0)
                   for cluster_id in range(n_clusters)]
     grouped_ts = np.array(grouped_ts)
-    
+
     if not ret_Wcorr:
         return grouped_ts
-    
-    Wcorr_mat = pairwise_distances(grouped_ts, metric=wcorr)
+
+    Wcorr_mat = pairwise_distances(grouped_ts, metric=lambda x, y: np.dot(w*x, y) / (np.linalg.norm(w*x) * np.linalg.norm(w*y)))
 
     return grouped_ts, Wcorr_mat
+
 
 class SSR:
     def __init__(self, M: int, N: int, f_s: float, p : float = 0.8, n_iter:int = 5, inverse_method='FOCUSS'):
@@ -440,11 +424,10 @@ class Troika:
         progress_bar.close()
 
 
-
-
+"""
 #%% test troika
     
-""" 
+
 from classical_utils import *
 import config
 import matplotlib.pyplot as plt
@@ -456,18 +439,21 @@ X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = loa
 i = 10000
 acc = X_test[i]
 hr_true = Y_test[i]
-pid = pid_test[i] """
+pid = pid_test[i] 
 
 
 
 #%%
-""" 
+ssa = SingularSpectrumAnalysis(window_size=500, groups=None)
+
 acc_x = data_utils.butterworth_bandpass(acc[:,0], low=0.5, high=4, fs=100)
 acc_y = data_utils.butterworth_bandpass(acc[:,1], low=0.5, high=4, fs=100)
 acc_z = data_utils.butterworth_bandpass(acc[:,2], low=0.5, high=4, fs=100)
-acc_groups_x, wcorr_x = ssa(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
-acc_groups_y, wcorr_y = ssa(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
-acc_groups_z, wcorr_z = ssa(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
+#acc_groups_x, wcorr_x = ssa_faster(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
+#acc_groups_y, wcorr_y = ssa_faster(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
+#acc_groups_z, wcorr_z = ssa_faster(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
+acc_groups_x = ssa.fit_transform(acc_x.reshape(1,-1))
+
 
 #%%
 def select_components(acc_groups, threshold=0.1):
@@ -496,82 +482,6 @@ frequencies, periodogram = scipy.signal.periodogram(acc_reconstructed, nfft=4096
 plt.show()
 plt.plot(frequencies*60, periodogram)
 plt.xlim(0,120)
-
-#%%
-
-f_s = 100
-M = 1000 #num samples in window
-N = 4096 #num frequencies
-lambda_factor = 1
-
-
-
-# %%
-from scipy.optimize import minimize
-# differentiating for more robustness
-y = acc_reconstructed
-#y = np.stack([acc_reconstructed_x, acc_reconstructed_y, acc_reconstructed_z], axis=-1)
-y = np.diff(y, axis=0)
-phi_pinv = np.linalg.pinv(Phi)
-lambda_factor = 500
-x0 = phi_pinv @ y
-
-#%%
-
-
-#%%
-
-import jax.numpy as jnp
-
-f_s = 100
-M = 999 #num samples in window
-N = 4096 #num frequencies
-
-#%%
-n_start = (0.01*N//f_s) - 1
-n_end = (4.5*N//f_s) + 1
-ns = np.arange(n_start, n_end)
-#ns = np.arange(0, N)
-m, n = np.meshgrid(np.arange(M), ns, indexing='ij')
-Phi = np.exp(1j * 2 * np.pi / N * m * n)
-x = jnp.ones((Phi.shape[-1]))
-
-
-#%%
-
-Phi = np.zeros((M, N), dtype=np.complex128)
-ns = np.arange(0, N)
-complex_factor = 1j * 2 * np.pi / N
-for m in range(M):
-    for n in range(N):
-        Phi[m, n] = np.exp(complex_factor * m * n)
-
-
-
-#%%
-y = acc_reconstructed.copy()
-y = data_utils.butterworth_bandpass(y, low=0.5, high=4, fs=100)
-#y = np.stack([acc_reconstructed_x, acc_reconstructed_y, acc_reconstructed_z], axis=-1)
-#y = np.pad(np.diff(y, 2,axis=0), (0,2))
-x = np.linalg.pinv(Phi) @ y
-
-#%%
-res = []
-for i in range(5):
-    x = focuss.step_noiseless(Phi, y, x, p=0.8)
-
-    x_hat = np.abs(x)
-    periodogram = x_hat
-    frequencies = ns / N * f_s
-    plt.plot(frequencies *60,periodogram, label=i)
-    sparsity = np.linalg.norm(x, ord=1)
-    estimation_quality = np.linalg.norm(Phi @ x - y, ord=0.8) 
-    res.append((sparsity, estimation_quality))
-
-    print(f"Sparsity: {sparsity}, estimation quality: {estimation_quality}")
-plt.legend()
-#%%
-
 
 
 

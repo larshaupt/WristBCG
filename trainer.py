@@ -4,7 +4,7 @@ import numpy as np
 import os
 import pickle as cp
 from augmentations import gen_aug
-from utils import tsne, mds, _logger
+from utils import tsne, _logger
 import time
 from models.frameworks import *
 
@@ -24,13 +24,11 @@ import pandas as pd
 import config
 import pdb
 import matplotlib.pyplot as plt
+import re
 
-# create directory for saving models and plots
-global model_dir_name
-model_dir_name = config.results_dir
 
 global plot_dir_name
-plot_dir_name = 'plot'
+plot_dir_name = config.plot_dir
 if not os.path.exists(plot_dir_name):
     os.makedirs(plot_dir_name)
 
@@ -338,21 +336,7 @@ def setup_model_optm(args, DEVICE):
 
     model = model.to(DEVICE)
 
-
     return model, optimizers
-
-
-def delete_files(args):
-    for epoch in range(args.n_epoch):
-        model_dir = os.path.join(model_dir_name, 'pretrain_' + args.model_name + str(epoch) + '.pt')
-        if os.path.isfile(model_dir):
-            os.remove(model_dir)
-
-        cls_dir = os.path.join(model_dir_name, 'lincls_' + args.model_name + str(epoch) + '.pt')
-        if os.path.isfile(cls_dir):
-            os.remove(cls_dir)
-
-
 
 
 def setup_args(args):
@@ -371,7 +355,6 @@ def setup_args(args):
     else:
         args.discretize_hr = False
 
-    
 
     if args.n_class == 1:
         assert args.loss in ['MSE', 'MAE', 'Huber', 'LogCosh', "NLE"]
@@ -423,7 +406,7 @@ def setup_args(args):
     model_name_opt += f"_szfactor_train_{args.take_every_nth_train}" if args.take_every_nth_train != 1 else ""
     model_name_opt += f"_wfrequency" if args.add_frequency else ""
     model_name_opt += f"_{args.rnn_type}" if args.rnn_type != "lstm" else ""
-    args.model_name = 'try_scheduler_' + args.framework + '_backbone_' + args.backbone +'_pretrain_' + args.pretrain_dataset + '_eps' + str(args.n_epoch) + '_lr' + str(args.lr_pretrain) + '_bs' + str(args.pretrain_batch_size) \
+    args.model_name = 'try_scheduler_' + args.framework + '_backbone_' + args.backbone +'_pretrain_' + args.pretrain_dataset + '_eps' + str(args.pretrain_n_epoch) + '_lr' + str(args.lr_pretrain) + '_bs' + str(args.pretrain_batch_size) \
                       + '_aug1' + args.aug1 + '_aug2' + args.aug2 + '_dim-pdim' + str(args.p) + '-' + str(args.phid) \
                       + '_EMA' + str(args.EMA) + '_criterion_' + args.criterion + '_lambda1_' + str(args.lambda1) + '_lambda2_' + str(args.lambda2) + '_tempunit_' + args.temp_unit  +  model_name_opt
 
@@ -435,7 +418,7 @@ def setup_args(args):
     args.pretrain_model_file = os.path.join(args.model_dir_name, 'pretrain_' + args.model_name  + "_bestmodel" + '.pt')
 
     lincl_model_name_opt = ""
-    lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty not in ["none", "mcdropout"] else ""
+    lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty not in ["none", "mcdropout", "ensemble"] else ""
     lincl_model_name_opt += f"_trainranked_{args.subsample_ranked_train}" if args.subsample_ranked_train not in [None, 0.0] else ""
     lincl_model_name_opt += f"_subsample_{args.subsample:.3f}" if args.subsample != 1 else ""
     lincl_model_name_opt += f"_timesplit" if args.split_by == "time" else ""
@@ -450,7 +433,11 @@ def setup_args(args):
     lincl_model_name = 'lincls'+ lincl_model_name_opt + "_" + args.backbone + '_dataset_' + args.dataset + '_split' + str(args.split) + '_eps' + str(args.n_epoch) + '_bs' + str(args.batch_size) + "_bestmodel" + '.pt'
 
     args.lincl_model_file = os.path.join(args.model_dir_name, lincl_model_name)
-
+    args.predictions_dir_test = args.lincl_model_file.replace(".pt", "_test.pickle")
+    args.predictions_dir_val = args.lincl_model_file.replace(".pt", "_val.pickle")
+    args.predictions_dir_post_test = args.lincl_model_file.replace(".pt", f"_test_{args.model_uncertainty}_{args.postprocessing}.pickle")
+    args.predictions_dir_post_val = args.lincl_model_file.replace(".pt", f"_val_{args.model_uncertainty}_{args.postprocessing}.pickle")
+    args.tsne_dir = args.lincl_model_file.replace("bestmodel.pt", "tsne.png")
     return args
     
 
@@ -770,7 +757,7 @@ def calculate_lincls_output(sample, target, trained_backbone, criterion, args):
         feat = feat.reshape(feat.shape[0], -1)
     loss = criterion(output, target)
 
-    
+    feat = feat.detach().cpu().numpy()
     if "bnn" in args.model_uncertainty:
         kl_loss = get_kl_loss(trained_backbone)/sample.shape[0]
         loss += kl_loss
@@ -798,9 +785,25 @@ def add_probability_wrapper(model, args, DEVICE):
 
     elif args.model_uncertainty == "gaussian_classification":    
         model = Uncertainty_Wrapper(model, n_classes=args.n_prob_class, return_probs=True)
+    
+    elif args.model_uncertainty == "ensemble":
+        model_path = args.lincl_model_file
+        model_paths_seed = [model_path]
+        for seed in range(100):
+            if "rseed" in model_path:
+                model_path_seed = re.sub(r'_rseed_\d+', f'_rseed_{seed}', model_path)
+            else:
+                #model_path_seed = re.sub(r'hrmax_\d_',  r'\1' + f'_rseed_{seed}.pt', model_path)
+                model_path_seed = re.sub(r'(hrmax_(\d+))', r'\1_rseed' + f"_{seed}", model_path)
+            if os.path.exists(model_path_seed):
+                model_paths_seed.append(model_path_seed)
+        print(f"Found {len(model_paths_seed)} models for ensemble")
+    
+        model = Ensemble_Wrapper(model, model_paths_seed, n_classes=args.n_prob_class, return_probs=True)
 
     else: # simple regression
         model = Uncertainty_Regression_Wrapper(model, n_classes=args.n_prob_class, return_probs=True)
+
 
     model = model.to(DEVICE)
 
@@ -828,7 +831,7 @@ def convert_to_hr(values, args):
 def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, optimizer, criterion, args):
     best_model = None
     min_val_corr = -1
-
+    best_model = copy.deepcopy(trained_backbone.state_dict())
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.n_epoch, eta_min=0)
 
     for epoch in range(args.n_epoch):
@@ -913,17 +916,17 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                     min_val_corr = corr_val
                     best_model = copy.deepcopy(trained_backbone.state_dict())
                     torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, args.lincl_model_file)
-                    print('Saving models and results at {} epoch to {}'.format(epoch, args.lincl_model_file))
-                    logging_table.to_pickle(os.path.join(args.model_dir_name, args.lincl_model_file.replace(".pt", f"_val.pickle")))
+                    print('Saving models and results at {} epoch to {}'.format(epoch, args.predictions_dir_val))
+                    logging_table.to_pickle(args.predictions_dir_val)
 
     return best_model
 
 
-def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, plt=False):
+def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args):
 
     total_loss = 0
     feats = None
-    hr_true, hr_pred, pids = [], [], []
+    hr_true, hr_pred, pids, feats = [], [], [], []
     total = 0
     with torch.no_grad():
         trained_backbone.eval()
@@ -933,14 +936,11 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(target.shape[0], -1)
                 loss, predicted, feat = calculate_lincls_output(sample, target, trained_backbone, criterion, args)
                 total_loss += loss.item()
-                if feats is None:
-                    feats = feat
-                else:
-                    feats = torch.cat((feats, feat), 0)
 
                 predicted = convert_to_hr(predicted, args)
                 target = convert_to_hr(target, args)
 
+                feats.append(feat)
                 hr_true.extend(target.squeeze())
                 hr_pred.extend(predicted.squeeze())
                 pids.extend(domain.cpu().numpy().squeeze())
@@ -954,13 +954,15 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
         # Logging results per participant id
         results_per_pid = []
         pids = np.array(pids)
+        feats = np.concatenate(feats, axis=0)
+
         for pid in np.unique(pids[:,0]):
             hr_true_pid = np.array(hr_true)[np.where(pids[:,0] == pid)]
-            hr_pred_pid = np.array(hr_pred)[np.where(pids[:,1] == pid)]
+            hr_pred_pid = np.array(hr_pred)[np.where(pids[:,0] == pid)]
             mae_pid = np.abs(hr_true_pid - hr_pred_pid).mean()
             corr_pid = corr_function(hr_true_pid, hr_pred_pid)
             results_per_pid.append((pid, mae_pid, corr_pid))
-        wandb.log({"results_per_pid": wandb.Table(data=results_per_pid, columns=["pid", "MAE", "Corr"])})
+            wandb.log({f"Test_MAE_{pid}": mae_pid, f"Test_Corr_{pid}": corr_pid})
         
         hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
         
@@ -971,16 +973,15 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args, 
         corr_val = corr_function(hr_true, hr_pred)
         wandb.log({'Test_Loss': total_loss, 'Test_MAE': mae_test, "Test_Corr": corr_val})
         logger.debug(f'Test Loss     : {total_loss:.4f}, Test MAE     : {mae_test:.4f}, Test Corr     : {corr_val:.4f}\n')
-        print('Saving results to {}'.format(args.model_dir_name))
-        logging_table.to_pickle(os.path.join(args.model_dir_name, args.lincl_model_file.replace(".pt", f"_test.pickle")))
+        print('Saving results to {}'.format(args.predictions_dir_test))
+        logging_table.to_pickle(args.predictions_dir_test)
 
 
-    if plt:
-        tsne(feats, hr_true, save_dir=plot_dir_name + '/' + args.model_name + '_tsne.png')
-        mds(feats, hr_true, save_dir=plot_dir_name + '/' + args.model_name + '_mds.png')
-        print('plots saved to ', plot_dir_name)
+    if args.plot_tsne:
+        tsne(feats, hr_true, save_dir=args.tsne_dir)
+        print('tSNE plot saved to ', args.tsne_dir)
 
-def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, criterion_cls, args, plt=False, prefix="Test"):
+def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, criterion_cls, args, prefix="Test"):
     hr_true, hr_pred, hr_pred_post, pids, uncertainties, probs, probs_post, target_probs = [], [], [], [], [], [], [], []
     total_loss = 0
     with torch.no_grad():
@@ -1038,8 +1039,14 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
             nll_post = nll_loss(probs_post, target_probs)
             wandb.log({f'{prefix}_Loss': total_loss, f'{prefix}_MAE': mae, f"{prefix}_Corr": corr, f"Post_{prefix}_MAE": mae_post, f"Post_{prefix}_Corr_Post": corr_post, f"{prefix}_ECE": ece, f"{prefix}_NLL": nll, f"Post_{prefix}_ECE": ece_post, f"Post_{prefix}_NLL": nll_post})
             logger.debug(f'{prefix} Loss     : {total_loss:.4f}, {prefix} MAE     : {mae:.4f}, {prefix} Corr     : {corr:.4f}, Post {prefix} MAE   : {mae_post:.4f}, Post {prefix} Corr   : {corr_post:.4f}   ECE: {ece:.4f}, NLL: {nll:.4f}, Post ECE: {ece_post:.4f}, Post NLL: {nll_post:.4f}\n')
-            print('Saving results to {}'.format(args.model_dir_name))
-            pd.DataFrame(logging_table).to_pickle(os.path.join(args.model_dir_name, args.lincl_model_file.replace(".pt", f"{prefix}_{args.model_uncertainty}_{args.postprocessing}.pickle")))
+            
+
+            if prefix.lower() =="test":
+                print('Saving results to {}'.format(args.predictions_dir_post_test))
+                pd.DataFrame(logging_table).to_pickle(args.predictions_dir_post_test)
+            else: #val
+                print('Saving results to {}'.format(args.predictions_dir_post_val))
+                pd.DataFrame(logging_table).to_pickle(args.predictions_dir_post_val)
 
 def setup_postprocessing_model(args):
 

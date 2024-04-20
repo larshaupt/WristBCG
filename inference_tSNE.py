@@ -21,16 +21,10 @@ from captum.attr import IntegratedGradients
 
 
 #%%
-X, Y, D, P, feats, splits = [], [], [], [], [], []
 
-for split in range(5):
+def run_inference(json_file):
+    X, Y, D, P, feats, splits = [], [], [], [], [], []
 
-    #json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_stepsize_4/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
-    #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
-    json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1t_warp_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
-    #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120_CorNET_dataset_max_split{split}_eps60_bs512_config.json"
-    # json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120_CorNET_dataset_max_split4_eps60_bs512_config.json"
-    #json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
     with open(json_file) as json_file:
         json_args = json.load(json_file)
 
@@ -110,9 +104,6 @@ for split in range(5):
 
     model_test.load_state_dict(model_weights, strict=False)
     model_test = model_test.to(DEVICE)
-
-
-
     
     model_test.eval()
     for i, (x, y, d) in enumerate(test_loader):
@@ -133,16 +124,26 @@ for split in range(5):
         feats.append(feat)
         splits.append([split]*len(y))
         
-X = np.concatenate(X)
-Y = np.concatenate(Y)
-D = np.concatenate(D)
-P = np.concatenate(P).squeeze()
-splits = np.concatenate(splits)
-feats = np.concatenate(feats)
+    X = np.concatenate(X)
+    Y = np.concatenate(Y)
+    D = np.concatenate(D)
+    P = np.concatenate(P).squeeze()
+    splits = np.concatenate(splits)
+    feats = np.concatenate(feats)
 
 
-P = P*(args.hr_max - args.hr_min) + args.hr_min
-Y = Y*(args.hr_max - args.hr_min) + args.hr_min
+    P = P*(args.hr_max - args.hr_min) + args.hr_min
+    Y = Y*(args.hr_max - args.hr_min) + args.hr_min
+
+    return X, Y, D, P, feats, splits
+#%%
+split = 0
+#json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm_stepsize_4/lincls_hrmin_20_hrmax_120_CorNET_dataset_apple100_split0_eps60_bs128_config.json"
+#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
+json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1t_warp_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_gru/lincls_lr_1.0E-05_lr_lstm_1.0E-04_hrmin_30_hrmax_120_CorNET_dataset_appleall_split{split}_eps60_bs512_config.json"
+#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120_CorNET_dataset_max_split{split}_eps60_bs512_config.json"
+# json_file = "/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_supervised_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs512_aug1jit_scal_aug2resample_dim-pdim128-128_EMA0.996_criterion_cos_sim_lambda1_1.0_lambda2_1.0_tempunit_tsfm/lincls_hrmin_30_hrmax_120_CorNET_dataset_max_split4_eps60_bs512_config.json"
+#json_file = f"/local/home/lhauptmann/thesis/CL-HAR/results/try_scheduler_nnclr_backbone_CorNET_pretrain_capture24_eps60_lr0.0001_bs128_aug1perm_jit_aug2bioglass_dim-pdim128-128_EMA0.996_criterion_NTXent_lambda1_1.0_lambda2_1.0_tempunit_tsfm_pretrain_subsample_0.100/lincls__lr_0.000_lr_lstm_0.000CorNET_dataset_apple100_split{split}_eps60_bs128_config.json"
 
 
 #%%
@@ -183,17 +184,19 @@ df_grouped
 #%%
 
 from sklearn.manifold import TSNE
-
+split = 0
+feats_split = feats[splits==0]
 # y_ground_truth = y_ground_truth.cpu().detach().numpy()
 tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=300)
-tsne_results = tsne.fit_transform(P)
+tsne_results = tsne.fit_transform(feats_split)
 
-
+#%%
+color = Y[splits==split]
 # %%
 
 #color = np.max(np.abs(X),axis=1).mean(axis=1)
 #color = np.apply_along_axis(lambda x: mean_frequency(x), 1, X).mean(axis=1)
-color = Y
+
 plt.scatter(x=tsne_results[:,0], y=tsne_results[:,1], c=color, cmap='viridis', alpha=0.2)
 
 # Add a colorbar to show the mapping between colors and values

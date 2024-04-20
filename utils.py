@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import subprocess
 import re
 import numpy as np
+import pickle
 
 def _logger(logger_name, level=logging.DEBUG):
     """
@@ -31,44 +32,17 @@ def tsne(latent, y_ground_truth, save_dir):
     """
         Plot t-SNE embeddings of the features
     """
-    latent = latent.cpu().detach().numpy()
-    # y_ground_truth = y_ground_truth.cpu().detach().numpy()
-    tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=300)
+    tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300)
     tsne_results = tsne.fit_transform(latent)
     plt.figure(figsize=(16,10))
-    set_y = set(y_ground_truth)
-    num_labels = len(set_y)
-    sns_plot = sns.scatterplot(
-        x=tsne_results[:,0], y=tsne_results[:,1],
-        hue=y_ground_truth,
-        palette=sns.color_palette("hls", num_labels),
-        legend="full",
-        alpha = 0.5
-        )
-
-    sns_plot.get_figure().savefig(save_dir)
+    plt.scatter(x=tsne_results[:,0], y=tsne_results[:,1], c=y_ground_truth, cmap='viridis', alpha=0.2)
+    plt.colorbar(label='True HR [bpm]')
+    plt.savefig(save_dir)
+    plt.clf()
+    with open(save_dir.replace('.png', '.pickle'), 'wb') as f:
+        pickle.dump((tsne_results, y_ground_truth), f)
 
 
-def mds(latent, y_ground_truth, save_dir):
-    """
-        Plot MDS embeddings of the features
-    """
-    latent = latent.cpu().detach().numpy()
-    mds = MDS(n_components=2)
-    mds_results = mds.fit_transform(latent)
-    plt.figure(figsize=(16,10))
-    set_y = set(y_ground_truth)
-    num_labels = len(set_y)
-    sns_plot = sns.scatterplot(
-        x=mds_results[:,0], y=mds_results[:,1],
-        hue=y_ground_truth,
-        palette=sns.color_palette("hls", num_labels),
-        # data=df_subset,
-        legend="full",
-        alpha=0.5
-        )
-
-    sns_plot.get_figure().savefig(save_dir)
 
 def get_gpu_info():
     try:

@@ -233,7 +233,8 @@ class BeliefPPG(Postprocessing):
 
         best_path.append(curr_ix)
 
-        pred = torch.tensor([x for x in reversed(best_path)], dtype=torch.float32)
+        pred_indices = torch.tensor([x for x in reversed(best_path)], dtype=torch.int64, device=probs.device)
+        pred = self.bins[pred_indices]
 
         # for compatibility, we also return uncertainty, which is all 0 here
         # also probability, which is simply the one-hot encoded prediction
@@ -323,9 +324,9 @@ class KalmanSmoothing(Postprocessing):
     def forward(self, probs, preds):
 
         smoothed_expectation = self.smooth(preds)
-        uncertainty = np.zeros(len(smoothed_expectation))
+        uncertainty = torch.zeros(len(preds), dtype=torch.float32)
 
-        uncertainty, smoothed_expectation = torch.tensor(uncertainty, dtype=torch.float32), torch.tensor(smoothed_expectation, dtype=torch.float32)
+        smoothed_expectation = torch.tensor(smoothed_expectation, dtype=torch.float32)
 
         if self.return_probs:
             probs = torch.zeros((len(smoothed_expectation), self.dim))

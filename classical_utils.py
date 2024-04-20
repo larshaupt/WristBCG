@@ -14,7 +14,7 @@ import TROIKA_bcg
 import data_utils
 import matplotlib.pyplot as plt
 
-def load_subjects(dataset_dir, subject_paths):
+def load_subjects(dataset_dir, subject_paths, normalize=True, args=None):
     X, Y, pid, metrics = [], [], [], []
     for sub in subject_paths:
         with open(os.path.join(dataset_dir, sub), "rb") as f:
@@ -35,9 +35,40 @@ def load_subjects(dataset_dir, subject_paths):
     pid = np.concatenate(pid, axis=0)
     metrics = np.concatenate(metrics, axis=0)
 
+    if normalize:
+        X = (X - X.mean(axis=1, keepdims=True)) / X.std(axis=1, keepdims=True)
+    
+    if args is not None:
+        thr_avg = args["data_thr_avg"]
+        thr_max = args["data_thr_max"]
+        thr_angle = args["data_thr_angle"]
+
+        X, Y, pid, metrics = filter_by_metric(metrics, [X, Y, pid, metrics], thr_avg, thr_max, thr_angle, 0, print_discarded=True)
+
     return X, Y, pid, metrics
 
-def load_dataset(dataset_dir, split, load_train=False):
+def filter_by_metric(metrics, data:list, thr_avg, thr_max, thr_angle, thr_hr, print_discarded=True):
+
+        if len(metrics) == 0:
+            print("No metrics found, returning all data")
+            return data
+        mask = np.ones_like(metrics[:,0], dtype=bool)
+        if thr_avg != None and thr_avg != 0:
+            mask = mask* (metrics[:,0] < thr_avg)
+        if thr_max != None and thr_max != 0:
+            mask = mask* (metrics[:,1] < thr_max)
+        if thr_angle != None and thr_angle != 0:
+            mask = mask* (metrics[:,2] < thr_angle)
+        if thr_hr != None and thr_hr != 0:
+            mask = mask* (metrics[:,3] > thr_hr)
+
+        if print_discarded:
+            print(f"Discarded {100 - mask.sum()/len(mask)*100:.2f}% of data by thresholding")
+
+        data = [d[mask] for d in data]
+        return data
+
+def load_dataset(dataset_dir, split, load_train=False, normalize=True, args=None):
     # load split
     split_file = os.path.join(dataset_dir, f'splits.json')
 
@@ -52,9 +83,9 @@ def load_dataset(dataset_dir, split, load_train=False):
 
     # load data
     if load_train:
-        X_train, Y_train, pid_train, metrics_train = load_subjects(dataset_dir, split["train"])
-    X_val, Y_val, pid_val, metrics_val = load_subjects(dataset_dir, split["val"])
-    X_test, Y_test, pid_test, metrics_test = load_subjects(dataset_dir, split["test"])
+        X_train, Y_train, pid_train, metrics_train = load_subjects(dataset_dir, split["train"], normalize=normalize, args=args)
+    X_val, Y_val, pid_val, metrics_val = load_subjects(dataset_dir, split["val"], normalize=normalize, args=args)
+    X_test, Y_test, pid_test, metrics_test = load_subjects(dataset_dir, split["test"], normalize=normalize, args=args)
 
     if load_train:
         return X_train, Y_train, pid_train, metrics_train, X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test
@@ -135,6 +166,15 @@ def compute_hr_median(X, Y_train, fs=100, **kwargs):
     # compute median HR from training data
     hr_median = np.median(Y_train)
     return [hr_median]*len(X)
+
+def compute_hr_subject_median(Y, pid,**kwargs):
+    pid = pid.squeeze()
+    if pid.ndim == 2:
+        pid = pid[:,0]
+    pid_unique = np.unique(pid)
+    pid_median_hr = np.array([np.median(Y[pid == p]) for p in pid_unique])
+    hr_median = np.array([pid_median_hr[np.where(pid_unique == p)[0][0]] for p in pid])
+    return hr_median
 
 def extract_hr_peaks(signal, fs, method="cwt"):
     if method == "cwt":
