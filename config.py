@@ -25,3 +25,4 @@ data_dir_Parkinson_processed_100Hz_wmetrics = "/local/home/lhauptmann/thesis/dat
 data_dir_Parkinson_processed_100Hz = "/local/home/lhauptmann/thesis/data/Parkinson_22to7_100Hz"
 classical_results_dir = "/local/home/lhauptmann/thesis/CL-HAR/signal_processing"
 data_dir_IEEE_processed = "/local/home/lhauptmann/thesis/data/IEEE_processed"
+ResNET_oxwearables_weights_path = "/local/home/lhauptmann/thesis/CL-HAR/models/mtl_best.mdl"

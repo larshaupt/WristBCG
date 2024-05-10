@@ -30,12 +30,13 @@ def get_parser():
     parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight decay')
     parser.add_argument('--weight_decay_pretrain', type=float, default=1e-7, help='weight decay for pretrain')
     parser.add_argument('--scheduler', type=bool, default=False, help='if or not to use a scheduler')
+    parser.add_argument('--scheduler_finetune', type=bool, default=False, help='if or not to use a scheduler for finetuning/supervised learning')
     parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam'], help='optimizer')
     parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh', 'CrossEntropy', 'NLE'], help='loss function')
     parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
     # dataset
-    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2'], help='name of dataset')
+    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2', 'appleall'], help='name of dataset')
     parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
     parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
     parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
@@ -77,8 +78,8 @@ def get_parser():
                         help='the type of augmentation transformation')
 
     # framework
-    parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction', 'median', 'subject_median'], help='name of framework')
-    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', 'HRCTPNet'], help='name of backbone network')
+    parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction', 'median', 'subject_median', 'oxford'], help='name of framework')
+    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', 'HRCTPNet', "ResNET"], help='name of backbone network')
     parser.add_argument('--num_kernels', type=int, default=32, help='number of kernels in CNN')
     parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
     parser.add_argument('--lstm_units', type=int, default=128, help='number of units in LSTM')
@@ -186,8 +187,11 @@ if __name__ == '__main__':
             pass
         else:
             # load best pretrain model
-            pretrain_model_weights = load_best_model(args)
-            model.load_state_dict(pretrain_model_weights)
+            if args.backbone == "ResNET":
+                model.load_weights(config.ResNET_oxwearables_weights_path)
+            else:
+                pretrain_model_weights = load_best_model(args)
+                model.load_state_dict(pretrain_model_weights)
 
     pretrain_model = model
 
@@ -197,7 +201,8 @@ if __name__ == '__main__':
     ############################################################################################################
 
     trained_backbone = extract_backbone(pretrain_model, args)
-    classifier, criterion_cls, optimizer_cls = setup_classifier(args, DEVICE, trained_backbone)
+    del pretrain_model
+    classifier, criterion_cls, optimizer_cls, scheduler_cls = setup_classifier(args, DEVICE, trained_backbone)
 
     if args.finetune:
 
@@ -212,7 +217,7 @@ if __name__ == '__main__':
         optimizer_cls.param_groups[1]['lr'] = args.lr_finetune_lstm
         optimizer_cls.add_param_group({'params': trained_backbone.classifier.parameters(), 'lr': args.lr})
         
-        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, args)
+        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, scheduler_cls, args)
         trained_backbone.load_state_dict(trained_backbone_weights)
 
         if len(test_loader) != 0:

@@ -3,6 +3,7 @@ import logging
 import sys
 from sklearn.manifold import TSNE
 from sklearn.manifold import MDS
+from torch.optim.lr_scheduler import _LRScheduler
 import seaborn as sns
 import matplotlib.pyplot as plt
 import subprocess

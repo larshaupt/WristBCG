@@ -44,7 +44,7 @@ def load_subjects(dataset_dir, subject_paths, normalize=True, args=None):
         thr_angle = args["data_thr_angle"]
 
         X, Y, pid, metrics = filter_by_metric(metrics, [X, Y, pid, metrics], thr_avg, thr_max, thr_angle, 0, print_discarded=True)
-
+    assert len(X) == len(Y) == len(pid) == len(metrics)
     return X, Y, pid, metrics
 
 def filter_by_metric(metrics, data:list, thr_avg, thr_max, thr_angle, thr_hr, print_discarded=True):

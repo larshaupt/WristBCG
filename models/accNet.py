@@ -1,9 +1,12 @@
+#%%
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from typing import Union, List, Dict, Any, cast
 import torch.nn.functional as F
+import unittest
+import copy
 
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
@@ -642,7 +645,7 @@ class ResBlock(nn.Module):
         x = self.relu(self.bn2(x))
         x = self.conv2(x)
 
-        x = x + identity
+        F = x + identity
 
         return x
 
@@ -660,15 +663,15 @@ class Resnet(nn.Module):
 
     """
 
+
     def __init__(
         self,
-        output_size=1,
-        n_channels=3,
-        is_eva=False,
-        resnet_version=1,
+        n_channels = 3,
+        n_classes = 1,
+        resnet_version = 1,
         epoch_len=10,
-        is_mtl=False,
-        is_simclr=False,
+        backbone=True,
+
     ):
         super(Resnet, self).__init__()
 
@@ -740,34 +743,14 @@ class Resnet(nn.Module):
                 ),
             )
             in_channels = out_channels
-
+        self.out_dim = out_channels*3
         self.feature_extractor = feature_extractor
-        self.is_mtl = is_mtl
-
-        # Classifier input size = last out_channels in previous layer
-        if is_eva:
-            self.classifier = EvaClassifier(
-                input_size=out_channels, output_size=output_size
-            )
-        elif is_mtl:
-            self.aot_h = Classifier(
-                input_size=out_channels, output_size=output_size
-            )
-            self.scale_h = Classifier(
-                input_size=out_channels, output_size=output_size
-            )
-            self.permute_h = Classifier(
-                input_size=out_channels, output_size=output_size
-            )
-            self.time_w_h = Classifier(
-                input_size=out_channels, output_size=output_size
-            )
-        elif is_simclr:
-            self.classifier = ProjectionHead(
-                input_size=out_channels, encoding_size=output_size
-            )
+        self.backbone = backbone
 
         weight_init(self)
+
+        if backbone == False:
+            self.classifier = nn.Linear(self.out_dim, n_classes) 
 
     @staticmethod
     def make_layer(
@@ -833,18 +816,65 @@ class Resnet(nn.Module):
         return nn.Sequential(*modules)
 
     def forward(self, x):
+        x = x.swapaxes(1, 2)
         feats = self.feature_extractor(x)
-
-        if self.is_mtl:
-            aot_y = self.aot_h(feats.view(x.shape[0], -1))
-            scale_y = self.scale_h(feats.view(x.shape[0], -1))
-            permute_y = self.permute_h(feats.view(x.shape[0], -1))
-            time_w_h = self.time_w_h(feats.view(x.shape[0], -1))
-            return aot_y, scale_y, permute_y, time_w_h
+        feats = feats.view(x.size(0), -1)
+        if self.backbone:
+            return None, feats
         else:
-            y = self.classifier(feats.view(x.shape[0], -1))
-            return y
-        return y
+            out = self.classifier(feats)
+            return out, feats
+    
+
+
+    def set_classification_head(self, classifier):
+        self.classifier = classifier
+        self.backbone = False
+
+    def load_weights(self, weight_path):
+        # only need to change weights name when
+        # the model is trained in a distributed manner
+
+        pretrained_dict = torch.load(weight_path)
+        pretrained_dict_v2 = copy.deepcopy(
+            pretrained_dict
+        )  # v2 has the right para names
+
+        # distributed pretraining can be inferred from the keys' module. prefix
+        head = next(iter(pretrained_dict_v2)).split(".")[
+            0
+        ]  # get head of first key
+        if head == "module":
+            # remove module. prefix from dict keys
+            pretrained_dict_v2 = {
+                k.partition("module.")[2]: pretrained_dict_v2[k]
+                for k in pretrained_dict_v2.keys()
+            }
+
+        if hasattr(self, "module"):
+            model_dict = self.module.state_dict()
+            multi_gpu_ft = True
+        else:
+            model_dict = self.state_dict()
+            multi_gpu_ft = False
+
+        # 1. filter out unnecessary keys such as the final linear layers
+        #    we don't want linear layer weights either
+        pretrained_dict = {
+            k: v
+            for k, v in pretrained_dict_v2.items()
+            if k in model_dict and k.split(".")[0] != "classifier"
+        }
+
+        # 2. overwrite entries in the existing state dict
+        model_dict.update(pretrained_dict)
+
+        # 3. load the new state dict
+        if multi_gpu_ft:
+            self.module.load_state_dict(model_dict)
+        else:
+            self.load_state_dict(model_dict)
+        print("%d Weights loaded" % len(pretrained_dict))
 
 
 def weight_init(self, mode="fan_out", nonlinearity="relu"):
@@ -938,3 +968,37 @@ class EncoderMLP(nn.Module):
         feats = self.encoder(x)
         y = self.classifier(feats.view(x.shape[0], -1))
         return y
+
+
+#%%
+class TestResnet(unittest.TestCase):
+    def test_resnet_forward_pass(self):
+        # Configuration for the test
+        n_channels = 3  # Number of input channels
+        output_size = 1  # Expected size of the model output
+        resnet_version = 1
+        epoch_len = 10
+        batch_size = 10  # Number of samples in the batch
+        input_length = 1000  # Length of the input data
+
+        # Initialize the Resnet model
+        model = Resnet(n_classes=output_size, n_channels=n_channels, resnet_version=resnet_version, epoch_len=epoch_len, backbone=False)
+        model.load_weights("/local/home/lhauptmann/thesis/CL-HAR/models/mtl_best.mdl")
+        # Create a dummy input tensor sized (batch_size, n_channels, input_length)
+        dummy_input = torch.randn(batch_size, n_channels, input_length)
+
+        # Evaluate the model using the dummy input
+        model.eval()
+        with torch.no_grad():
+            output = model(dummy_input)
+
+        # Check if the output has the expected shape
+        self.assertEqual(output.shape, (batch_size, output_size))
+
+        # Additional checks can be included here if necessary, such as checking
+        # the model's ability to handle different configurations or multiple forward passes
+
+if __name__ == '__main__':
+    unittest.main()
+
+# %%

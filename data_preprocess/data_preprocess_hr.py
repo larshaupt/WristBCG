@@ -34,11 +34,14 @@ def rank_metrics(metrics):
     return best_ind
 
 class data_loader_hr(Dataset):
-    def __init__(self, samples, labels, domains):
+    def __init__(self, samples, labels, domains, split = None, partition=None, dataset=None):
 
         self.samples = samples
         self.domains = domains
         self.labels = labels
+        self.split = split
+        self.partition = partition
+        self.dataset = dataset
     
     def __getitem__(self, index):
         sample, target, domain = self.samples[index], self.labels[index], self.domains[index]
@@ -145,7 +148,7 @@ def preprocess():
     print('preprocessing the data...')
     print('preprocessing done!')
 
-def subsample_by_index(x,y, d, random_indices, ratio):
+def subsample_by_index(x, y, d, random_indices, ratio):
     # Subsamples the data by the given indices
     # The indices are given in a dictionary, where the key is the subject id and the value is an array of indices
     # The ratio is the fraction of samples to keep
@@ -434,9 +437,12 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
     d_test = d_test.astype(float)
 
     if subsample != 1.0:
+        assert (1/subsample).is_integer(), "Subsample rate must be a fraction of 1"
+        subsample_every_n = int(1/subsample)
+        x_train = x_train[subsample_every_n//2::subsample_every_n]
+        y_train = y_train[subsample_every_n//2::subsample_every_n]
+        d_train = d_train[subsample_every_n//2::subsample_every_n]
 
-        subsample_indices = load_random_indices(data_path)
-        x_train, y_train, d_train = subsample_by_index(x_train, y_train, d_train, subsample_indices, subsample)
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
@@ -641,9 +647,9 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
     if args.sampling_rate != sampling_rate and args.sampling_rate != 0:
-        x_train, y_train, d_train = resample_data(x_train, y_train, d_train, sampling_rate, args.sampling_rate)
-        x_val, y_val, d_val = resample_data(x_val, y_val, d_val, sampling_rate, args.sampling_rate)
-        x_test, y_test, d_test = resample_data(x_test, y_test, d_test, sampling_rate, args.sampling_rate)
+        x_train = resample_data(x_train, sampling_rate, args.sampling_rate, args.cuda)
+        x_val = resample_data(x_val, sampling_rate, args.sampling_rate, args.cuda)
+        x_test = resample_data(x_test, sampling_rate, args.sampling_rate, args.cuda)
     else:
         args.sampling_rate = sampling_rate
 
@@ -682,23 +688,23 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         x_val, y_val, d_val = generate_batch_sequences(x_val, y_val, d_val)
         x_test, y_test, d_test = generate_batch_sequences(x_test, y_test, d_test)
 
-        train_set = data_loader_hr(x_train, y_train, d_train)
+        train_set = data_loader_hr(x_train, y_train, d_train, split=split, partition="train", dataset=dataset)
         train_loader = DataLoader(train_set, batch_size=None, drop_last=False, batch_sampler=None, num_workers=args.num_workers, pin_memory=True, shuffle=True)
 
-        test_set = data_loader_hr(x_test, y_test, d_test)
+        test_set = data_loader_hr(x_test, y_test, d_test, split=split, partition="test", dataset=dataset)
         test_loader = DataLoader(test_set, batch_size=None, batch_sampler=None, shuffle=False)
 
-        val_set = data_loader_hr(x_val, y_val, d_val)
+        val_set = data_loader_hr(x_val, y_val, d_val, split=split, partition="val", dataset=dataset)
         val_loader = DataLoader(val_set, batch_size=None, batch_sampler=None, shuffle=False)
         
     else:
-        train_set = data_loader_hr(x_train, y_train, d_train)
-        train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=True, num_workers=args.num_workers, pin_memory=True, shuffle=True)
+        train_set = data_loader_hr(x_train, y_train, d_train, split=split, partition="train", dataset=dataset)
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, drop_last=False, num_workers=args.num_workers, pin_memory=True, shuffle=True)
 
-        test_set = data_loader_hr(x_test, y_test, d_test)
+        test_set = data_loader_hr(x_test, y_test, d_test, split=split, partition="test", dataset=dataset)
         test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
 
-        val_set = data_loader_hr(x_val, y_val, d_val)
+        val_set = data_loader_hr(x_val, y_val, d_val, split=split, partition="val", dataset=dataset)
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
 
     print(f"Number of batches in train_loader: {len(train_loader)}")
@@ -707,22 +713,17 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
 
     return train_loader, val_loader, test_loader
 
-def resample_data(x, y, d, fs, fs_new):
-
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def resample_data(x, fs, fs_new, cuda=-1):
+    if cuda != -1:
+        DEVICE = torch.device('cuda:' + str(cuda) if torch.cuda.is_available() else 'cpu')
+    else:
+        DEVICE = "cpu"
     resample = julius.ResampleFrac(fs, fs_new).to(DEVICE)
 
-    time_vector = np.arange(0, x.shape[1], 1)
-    time_vector_resampled = np.arange(0, x.shape[1], fs/fs_new)
-    f_d = interp1d(time_vector, d, axis=1)
-    d = f_d(time_vector_resampled, kind='previous', copy=False, fill_value="extrapolate")
+    # needs to apply this on all channels seperately
+    x = np.stack([resample(torch.Tensor(x[:,:,i]).to(DEVICE).float()).cpu().numpy() for i in range(x.shape[2])], axis=-1)
 
-    x = resample(torch.Tensor(x).to(DEVICE).float()).cpu().numpy()
-    y = resample(torch.Tensor(y).to(DEVICE).float()).cpu().numpy()
-    d = resample(torch.Tensor(d).to(DEVICE).float()).cpu().numpy()
-
-
-    return x, y, d
+    return x
 
 
 

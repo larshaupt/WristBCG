@@ -261,6 +261,10 @@ def setup_model_optm(args, DEVICE):
             backbone = HRCTPNet(num_channels=args.n_feature, 
                                 num_classes=args.n_class,
                                 backbone=True,)
+        elif args.backbone == "ResNET":
+            backbone = Resnet(n_channels=args.n_feature, 
+                              n_classes=args.n_class, 
+                              backbone=True)
         else:
             raise NotImplementedError
 
@@ -331,8 +335,12 @@ def setup_model_optm(args, DEVICE):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_pretrain, weight_decay=args.weight_decay_pretrain)
         args
         optimizers = [optimizer]
+    elif args.framework == 'oxford':
+        model = backbone
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_pretrain, weight_decay=args.weight_decay_pretrain)
+        optimizers = [optimizer]
     else:
-        NotImplementedError
+        raise NotImplementedError
 
     model = model.to(DEVICE)
 
@@ -345,10 +353,13 @@ def setup_args(args):
     if args.lr_finetune_lstm == -1:
         args.lr_finetune_lstm = args.lr_finetune_backbone
 
+    if args.pretrain_dataset in ["appleall", "max_v2"]:
+        args.dataset = args.pretrain_dataset
+
     if args.model_uncertainty == "gaussian_classification":
         args.discretize_hr = True
         args.n_class = args.n_prob_class
-        args.loss = "CrossEntropy"
+        args.loss = "CrossEntropy" # this achieves better calibration, still need to evaluate why
     elif args.model_uncertainty == "NLE":
         args.loss = "NLE"
         args.discretize_hr = False
@@ -359,7 +370,7 @@ def setup_args(args):
     if args.n_class == 1:
         assert args.loss in ['MSE', 'MAE', 'Huber', 'LogCosh', "NLE"]
     else:
-        assert args.loss == 'CrossEntropy'
+        assert args.loss in ['CrossEntropy']
 
     if args.dataset in ['max', 'apple', 'apple100', 'capture24', 'capture24all', 'm2sleep', 'm2sleep100', "parkinson100", "IEEE", "appleall", "max_v2", "max_hrv"]:
         args.n_feature = 3
@@ -368,6 +379,8 @@ def setup_args(args):
         # limit batch size to 128 for transformer, otherwise it will run out of memory
         args.pretrain_batch_size = min(args.pretrain_batch_size, 128)
         args.batch_size = min(args.batch_size, 128)
+    elif args.backbone == "HRCTPNet":
+        args.scheduler_finetune = "WarmupRoot"
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -397,6 +410,8 @@ def setup_args(args):
         args.criterion = 'MSE'
         args.n_channels_out = 1
         assert args.backbone in ['AE', 'CNN_AE', "CorNET", "LSTM", "Transformer", "Attention_CNN_AE", "HRCTPNet"]
+    if args.framework == 'oxford':
+        args.backbone == "ResNET"
 
     model_name_opt = ""
     model_name_opt += f"_pretrain_subsample_{args.pretrain_subsample:.3f}"  if args.pretrain_subsample != 1 else ""
@@ -430,6 +445,7 @@ def setup_args(args):
     lincl_model_name_opt += f"_hrmax_{args.hr_max}" if args.hr_max != 110 else ""
     lincl_model_name_opt += f"_rseed_{args.random_seed}" if args.random_seed != 10 else ""
     lincl_model_name_opt += f"_nlayers_{args.num_layers_classifier}" if args.num_layers_classifier != 1 else ""
+    lincl_model_name_opt += f"samplingrate_{args.sampling_rate}" if not (args.sampling_rate == 0 or args.sampling_rate == 100) else ""
     lincl_model_name = 'lincls'+ lincl_model_name_opt + "_" + args.backbone + '_dataset_' + args.dataset + '_split' + str(args.split) + '_eps' + str(args.n_epoch) + '_bs' + str(args.batch_size) + "_bestmodel" + '.pt'
 
     args.lincl_model_file = os.path.join(args.model_dir_name, lincl_model_name)
@@ -525,7 +541,13 @@ def setup_classifier(args, DEVICE, backbone):
     if args.optimizer == 'Adam':
         optimizer_cls = torch.optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
     else:
-        NotImplementedError
+        raise NotImplementedError
+    
+    if args.scheduler_finetune == "WarmupRoot":
+        scheduler_cls = torch.optim.lr_scheduler.LambdaLR(optimizer_cls, lr_lambda=lambda epoch: min(1/np.sqrt(epoch), epoch*np.power(4,-1.5)))
+    else: # constant original learning rate
+        scheduler_cls = torch.optim.lr_scheduler.LambdaLR(optimizer_cls, lr_lambda=lambda epoch: 1)
+
 
     if args.loss == 'MSE':
         criterion_cls = nn.MSELoss()
@@ -536,13 +558,15 @@ def setup_classifier(args, DEVICE, backbone):
     elif args.loss == 'LogCosh':
         criterion_cls = LogCoshError()
     elif args.loss == 'CrossEntropy':
+        criterion_cls = nn.CrossEntropyLoss(reduction='mean')
+    elif args.loss == 'BinaryCrossEntropy':
         criterion_cls = nn.BCELoss(reduction='mean')
     elif args.loss == 'NLE':
         criterion_cls = NLELoss(ratio = 0)
     else:
         NotImplementedError
 
-    return classifier, criterion_cls, optimizer_cls
+    return classifier, criterion_cls, optimizer_cls, scheduler_cls
 
 
 
@@ -742,8 +766,10 @@ def extract_backbone(model, args):
         trained_backbone = model
     elif args.framework == 'reconstruction':
         trained_backbone = model
+    elif args.framework == 'oxford':
+        trained_backbone = model
     else:
-        NotImplementedError
+        raise NotImplementedError
     
     if args.backbone in ["AE", "CNN_AE"]:
         trained_backbone = trained_backbone.encoder
@@ -828,23 +854,20 @@ def convert_to_hr(values, args):
     return values
 
 
-def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, optimizer, criterion, args):
+def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, optimizer, criterion, scheduler, args):
     best_model = None
     min_val_corr = -1
     best_model = copy.deepcopy(trained_backbone.state_dict())
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.n_epoch, eta_min=0)
 
     for epoch in range(args.n_epoch):
         trained_backbone.train() # TODO: remove this
-        total_loss = 0
-        n_batches = 0
+        train_loss = 0
         hr_true, hr_pred = [], []
         with tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.n_epoch} - Training Lincls", unit='batch') as tepoch:
             for idx, (sample, target, domain) in enumerate(tepoch):
-                n_batches += 1
                 sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(target.shape[0], -1)
                 loss, predicted, _, = calculate_lincls_output(sample, target, trained_backbone, criterion, args)
-                total_loss += loss.item()
+                train_loss += loss.item()
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -859,7 +882,8 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
         # save model
         hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
         mae_train = np.abs(hr_true - hr_pred).mean()
-        train_loss = total_loss / n_batches
+        if len(train_loader) != 0:
+            train_loss = train_loss / len(train_loader)
         corr_train = corr_function(hr_true, hr_pred)
         #model_dir = os.path.join(args.model_dir_name, 'lincls_' + args.model_name + '_' + args.dataset + "_split" + str(args.split) + "_" + str(epoch) + '.pt')
         #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
@@ -870,7 +894,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
         wandb.log({'Train_Loss': train_loss, 'Train_MAE': mae_train, 'Train_Corr': corr_train}, step=epoch)
 
 
-        if args.scheduler:
+        if args.scheduler_finetune:
             scheduler.step()
 
         if val_loader is None:
@@ -888,7 +912,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                         n_batches += 1
                         sample, target = sample.to(DEVICE).float(), target.to(DEVICE).float().reshape(target.shape[0], -1)
                         loss, predicted, _ = calculate_lincls_output(sample, target, trained_backbone, criterion, args)
-                        total_loss += loss.item()
+                        val_loss += loss.item()
 
                         predicted = convert_to_hr(predicted, args)
                         target = convert_to_hr(target, args)
@@ -899,7 +923,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                 hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
                 mae_val = np.abs(hr_true - hr_pred).mean()
                 corr_val = corr_function(hr_true, hr_pred)
-                val_loss = total_loss / n_batches
+                val_loss = val_loss / n_batches
 
                 logging_table = pd.DataFrame({ 
                     "hr_true": hr_true, 
