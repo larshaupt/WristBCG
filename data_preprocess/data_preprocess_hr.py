@@ -12,6 +12,7 @@ from scipy.interpolate import interp1d
 import torch
 import pickle as cp
 from torch.utils.data import Dataset, DataLoader
+from data_preprocess_utils import *
 import config
 import re
 import json
@@ -23,15 +24,21 @@ import julius
 NUM_FEATURES = 1
 
 
-def rank_metrics(metrics):
-    assert len(metrics.shape) == 2
-    # Takes as input an np array of shape (n_samples, n_metrics)
-    # The metric should have low values for good data
-    # Returns an array of shape (n_samples) with the indices of the best samples
-    ranks = np.apply_along_axis(rankdata, 0, metrics, method="max")
-    ranks = np.mean(ranks, axis=1)
-    best_ind = np.argsort(ranks)
-    return best_ind
+class data_loader_hr(Dataset):
+    def __init__(self, samples, labels, domains, split = None, partition=None, dataset=None):
+
+        self.samples = samples
+        self.domains = domains
+        self.labels = labels
+        self.split = split
+        self.partition = partition
+        self.dataset = dataset
+    
+    def __getitem__(self, index):
+        sample, target, domain = self.samples[index], self.labels[index], self.domains[index]
+        return sample, target, domain
+    def __len__(self):
+        return len(self.samples)
 
 class data_loader_hr(Dataset):
     def __init__(self, samples, labels, domains, split = None, partition=None, dataset=None):
@@ -50,129 +57,15 @@ class data_loader_hr(Dataset):
         return len(self.samples)
 
 
-def downsampling(data_t, data_x, data_y, freq):
-    """Recordings are downsamplied to 50Hz
     
-    :param data_t: numpy integer array
-        time array
-    :param data_x: numpy integer array
-        sensor recordings
-    :param data_y: numpy integer array
-        labels
-    :return: numpy integer array
-        Downsampled input
-    """
-    idx = np.arange(0, data_t.shape[0], int(freq/50))
-
-    return data_t[idx], data_x[idx], data_y[idx]
-
-def normalize_samples(data):
-    if len(data) != 0:
-        return (data - np.mean(data, axis=1, keepdims=True)) / np.std(data, axis=1, keepdims=True)
-    else:
-        return data
-    
-def generate_batch_sequences(x, y, pid, time_diff=8):
-
-    # Generates batches of the given data
-    # Always puts consecutive samples from the same subject into the same batch
-    # Uses the subject id and starting time from pid for batching
-    # Because we don't know what's the general time difference between samples from the same subject, we infer it from the data
-
-    diffs = np.unique(np.diff(pid[:,1]), return_counts=True)
-    most_frequent_diff = diffs[0][np.argmax(diffs[1])]
-
-    indices = []
-    time_diff = most_frequent_diff
-    current_sub = None
-    current_start_time = None
-    current_indices = []
-    for i in range(len(pid)):
-        sub, start_time = pid[i][0], pid[i][1]
-        if current_sub != sub or abs(start_time - current_start_time) != time_diff:
-
-            if len(current_indices) > 0:
-                indices.append(np.array(current_indices))
-
-            current_indices = [i]
-            current_sub = sub
-            current_start_time = start_time
-        else:
-            current_indices.append(i)
-            current_start_time = start_time
-
-    x = [x[i] for i in indices]
-    y = [y[i] for i in indices]
-    pid = [pid[i] for i in indices]
-
-    return x, y, pid
-
-    
-    
-def discretize_hr(y, hr_min, hr_max, n_bins:int=64, sigma=1.5):
-    """
-    Discretizes a continuous heartrate value into a one-hot encoding.
-    Assumes that alle y values are in the range [0,1]
-    Values outside this range will be put into the first or last bin.
-    Outputs a shape (n_samples, n_bins) array.
-    """
-    def gaussian(x, mu, sig):
-        if sig == 0:
-            return (x == mu) * 1.0
-        return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
-
-    hr_range = hr_max - hr_min
-    
-    # clip values outside the range plus 3* sigma
-    y = np.clip(y,-sigma/hr_range*3, 1 + sigma/hr_range*3)
-
-    bins = np.linspace(0, 1, n_bins-1)
-    bin_values = np.concatenate([[bins[0]], (bins[1:] + bins[:-1])/2 , [bins[-1]]])
-
-    # creates discrete distributions of hr values
-    y_discretized = np.array([gaussian(bin_values , x, sigma/hr_range) for x in y])
-
-    y_discretized = y_discretized / y_discretized.sum(axis=1, keepdims=True)
-
-
-    return y_discretized
-
-def norm_hr(y, hr_min, hr_max):
-    """
-    Normalizes a continuous heartrate value into the range [0,1]
-    """
-    return (y - hr_min) / (hr_max - hr_min)
-    
-
-def preprocess():
-    print('preprocessing the data...')
-    print('preprocessing done!')
-
-def subsample_by_index(x, y, d, random_indices, ratio):
-    # Subsamples the data by the given indices
-    # The indices are given in a dictionary, where the key is the subject id and the value is an array of indices
-    # The ratio is the fraction of samples to keep
-    pids = np.unique(d[:,0])
-
-    for pid in pids:
-        indices = np.where(d[:,0] == pid)[0]
-        indices = indices[random_indices[int(pid)][:int(len(indices)*ratio)]]
-        if pid == pids[0]:
-            indices_all = indices
-        else:
-            indices_all = np.concatenate((indices_all, indices))
-
-    x = x[indices_all]
-    y = y[indices_all]
-    d = d[indices_all]
-    return x,y,d
-    
-def load_random_indices(data_path):
-    with open(os.path.join(data_path, "random_indices.pickle"), 'rb') as f:
-        random_indices = cp.load(f)
-    return random_indices
-    
-def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=False, take_every_nth_train=1, take_every_nth_test=1, sampling_rate = None):
+def load_data(data_path, 
+              split=0,  
+              subsample=1.0, 
+              args=None, 
+              reconstruction=False, 
+              take_every_nth_train=1, 
+              take_every_nth_test=1, 
+              sampling_rate = None):
 
     if sampling_rate == None or sampling_rate == 0:
             sampling_rate = 100 # since we are nromalizing the spectrogram later anyway, we can use any sampling rate
@@ -198,28 +91,6 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
         bandpass_freq_min = None
         bandpass_freq_max = None
 
-
-    def load_pickle(path):
-
-        if not os.path.exists(path):
-            FileNotFoundError(f"File {path} does not exist")
-
-        with open(path, 'rb') as f:
-            data = cp.load(f)
-
-        if len(data) == 3:
-            x_, y_, pid_ = data
-            metrics_ = np.array([])
-        elif len(data) == 4:
-            x_, y_, pid_, metrics_ = data
-        elif len(data) == 2:
-            x_, pid_ = data
-            y_ = np.array([])
-            metrics_ = np.array([])
-        else:
-            raise ValueError(f"Invalid data shape {len(data)}")
-        
-        return x_, y_, pid_, metrics_
     
     def load_split(files, path):
         x, y, pid, mectrics = [], [], [], []
@@ -446,24 +317,22 @@ def load_data(data_path, split=0,  subsample=1.0, args=None, reconstruction=Fals
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
 
-def load_data_no_labels(data_path, split:int=0, subsample=1.0, reconstruction=False):
+def load_data_no_labels(data_path:str, split:int=0, subsample:float=1.0, reconstruction:bool=False):
+
+
+
     # Load data without labels
     # Used for capture24 dataset
     # Substitutes labels with zeros
 
     if reconstruction:
-        raise NotImplementedError("Reconstruction not possible for capture24 dataset")
+        raise NotImplementedError(f"Reconstruction not possible for dataset {data_path}")
 
-
-    def load_pickle(path):
-        with open(path, 'rb') as f:
-            x,pid = cp.load(f)
-        return x,pid
     
     def load_split(files, path):
         x,  pid = [], []
         for file in files:
-            x_, pid_ = load_pickle(os.path.join(path, file))
+            x_, _, pid_, _ = load_pickle(os.path.join(path, file))
             if len(x_) == 0:
                 continue
             x.append(x_)
@@ -494,9 +363,11 @@ def load_data_no_labels(data_path, split:int=0, subsample=1.0, reconstruction=Fa
     
     if subsample != 1.0:
 
-        subsample_indices = load_random_indices(data_path)
-
-        x_train, y_train, d_train = subsample_by_index(x_train, y_train, d_train, subsample_indices, subsample)
+        assert (1/subsample).is_integer(), "Subsample rate must be a fraction of 1"
+        subsample_every_n = int(1/subsample)
+        x_train = x_train[subsample_every_n//2::subsample_every_n]
+        y_train = y_train[subsample_every_n//2::subsample_every_n]
+        d_train = d_train[subsample_every_n//2::subsample_every_n]
 
 
     return x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test 
@@ -713,17 +584,6 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
 
     return train_loader, val_loader, test_loader
 
-def resample_data(x, fs, fs_new, cuda=-1):
-    if cuda != -1:
-        DEVICE = torch.device('cuda:' + str(cuda) if torch.cuda.is_available() else 'cpu')
-    else:
-        DEVICE = "cpu"
-    resample = julius.ResampleFrac(fs, fs_new).to(DEVICE)
-
-    # needs to apply this on all channels seperately
-    x = np.stack([resample(torch.Tensor(x[:,:,i]).to(DEVICE).float()).cpu().numpy() for i in range(x.shape[2])], axis=-1)
-
-    return x
 
 
 
