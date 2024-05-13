@@ -1,17 +1,10 @@
-# %%
 import numpy as np
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
-import classical_utils
 
+# Code is from Nicolas Kopp
 
-
-# TODO: Have a look at the following paper:
-# TROIKA: A General Framework for Heart Rate Monitoring Using Wrist-Type Photoplethysmographic Signals Durin
-# Same approach, but component selection is different
-# https://github.com/hpi-dhc/TROIKA/blob/c144c185a87c2f52fbc6f7e0f82dde790a99bf7e/py_ppg_package/ppg_package/TROIKA.py
-# %%
 def embed_time_series(data, window_size):
     # function to form a hankel matrix from delay-embeddings from time series
     # data                  -   a snippet/observation window from a 1d time series
@@ -23,7 +16,7 @@ def embed_time_series(data, window_size):
         hankel_matrix[:, i] = data[i:i+window_size]
     return hankel_matrix
 
-# %%
+
 def decompose_hankel_matrix(hankel):
     # got numpy.linalg.LinAlgError: SVD did not converge error before
     U, S, Vt = np.linalg.svd(hankel,full_matrices=False)
@@ -31,7 +24,7 @@ def decompose_hankel_matrix(hankel):
     return U, S, Vt
 
 
-# %%
+
 def mean_anti_diagonals(A):
     # Get the dimensions of the matrix A
     rows, cols = A.shape
@@ -48,7 +41,7 @@ def mean_anti_diagonals(A):
 
 
 
-# %%
+
 def reconstruct_time_series(U, S, Vt, selected_indices):
     reconstructed_matrix = np.zeros_like(U)
     for i in selected_indices:
@@ -59,14 +52,8 @@ def reconstruct_time_series(U, S, Vt, selected_indices):
     return reconstructed_series
 
 
-# %%
-# test reconstruct_time_series
-#matrix1 = np.array([[1,1,1],[3,2,1],[1,1,1]])
-#matrix2 = np.array([[1,3,1],[3,3,3],[1,1,1]])
-#reconstruct_time_series(matrix1,np.arange(3), matrix2,[1])
 
 
-# %%
 def get_C_for_component_i(U1, U2,i):
     val = 0
     #print(U2.shape)
@@ -77,14 +64,8 @@ def get_C_for_component_i(U1, U2,i):
             val = temp
     return val
 
-# %%
-# test get_C_for_component_i
-# matrix1 = np.array([[1,1,1],[2,2,2],[3,3,3]])
-# matrix2 = np.array([[1,1,1],[1,1,1],[1,1,1]])
-# val = get_C_for_component_i(matrix1, matrix2,0)
 
 
-# %%
 def component_selection(Ux, Uy, Uz, tau):
     indices = list()
     for i in range(Ux.shape[1]):
@@ -95,7 +76,7 @@ def component_selection(Ux, Uy, Uz, tau):
             indices.append(i)
     return np.array(indices)
 
-# %%
+
 def do_ssa_firstn(time_series, lagged_window_size = 1001, first_n_components = 10,):
     # perform singular spectrum analysis, based on singular value decomposition and 
     # thresholding for component selection, and return reconstructed signal that
@@ -155,6 +136,3 @@ def do_ssa_axis(time_series, lagged_window_size = 1001, main_axis = "x", tau=0.6
         reconstructed_signal = reconstruct_time_series(Uz, Sz, Vzt, selected_indices)
 
     return reconstructed_signal
-
-# %%
-

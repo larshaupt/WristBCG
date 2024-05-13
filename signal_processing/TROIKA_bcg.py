@@ -1,20 +1,15 @@
 
-#%%
+
 import numpy as np
-from numpy.lib.histograms import _hist_bin_sqrt
-from numpy.polynomial import Polynomial
-from pprint import pprint
 from sklearn.metrics import pairwise_distances
 from sklearn.cluster import AgglomerativeClustering
 import scipy
 from scipy.linalg import hankel
 from scipy.signal import butter, sosfiltfilt
-from scipy.optimize import minimize
 from tqdm import tqdm
 import cr.sparse.cvx.focuss as focuss
 
-#%%
-import pandas as pd
+# Code adapted from https://github.com/hpi-dhc/TROIKA
 
 def ssa(ts: np.ndarray, L: int, perform_grouping: bool = True, wcorr_threshold: float = 0.3, ret_Wcorr: bool = False):
     """
@@ -424,147 +419,3 @@ class Troika:
         progress_bar.close()
 
 
-"""
-#%% test troika
-    
-
-from classical_utils import *
-import config
-import matplotlib.pyplot as plt
-
-dataset_dir = config.data_dir_Apple_processed_100hz
-split = 0
-X_val, Y_val, pid_val, metrics_val, X_test, Y_test, pid_test, metrics_test = load_dataset(dataset_dir, split)
-
-i = 10000
-acc = X_test[i]
-hr_true = Y_test[i]
-pid = pid_test[i] 
-
-
-
-#%%
-ssa = SingularSpectrumAnalysis(window_size=500, groups=None)
-
-acc_x = data_utils.butterworth_bandpass(acc[:,0], low=0.5, high=4, fs=100)
-acc_y = data_utils.butterworth_bandpass(acc[:,1], low=0.5, high=4, fs=100)
-acc_z = data_utils.butterworth_bandpass(acc[:,2], low=0.5, high=4, fs=100)
-#acc_groups_x, wcorr_x = ssa_faster(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
-#acc_groups_y, wcorr_y = ssa_faster(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
-#acc_groups_z, wcorr_z = ssa_faster(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
-acc_groups_x = ssa.fit_transform(acc_x.reshape(1,-1))
-
-
-#%%
-def select_components(acc_groups, threshold=0.1):
-    selected_indices = []
-    for i in range(acc_groups.shape[0]):
-        frequencies, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=4096 * 2 - 1, fs=100)
-        max_amplitude = np.max(np.abs(periodogram))
-        hr_frequenies = (frequencies > 0.5) & (frequencies < 3)
-
-        if np.any(periodogram[hr_frequenies] > max_amplitude*threshold):
-            selected_indices = np.append(selected_indices, i)
-    #print(selected_indices)
-    selected_indices = np.array(selected_indices, dtype=int)
-    acc_reconstructed = acc_groups[selected_indices,:].sum(axis=0)
-    return acc_reconstructed
-
-threshold = 0.01
-acc_reconstructed_x = select_components(acc_groups_x, threshold)
-acc_reconstructed_y = select_components(acc_groups_y, threshold)
-acc_reconstructed_z = select_components(acc_groups_z, threshold)
-
-acc_reconstructed = np.sqrt(acc_reconstructed_x**2 + acc_reconstructed_y**2 + acc_reconstructed_z**2)
-acc_reconstructed = data_utils.butterworth_bandpass(acc_reconstructed, low=0.5, high=2.5, fs=100)
-plt.plot(acc_reconstructed)
-frequencies, periodogram = scipy.signal.periodogram(acc_reconstructed, nfft=4096 * 2 - 1, fs=100)
-plt.show()
-plt.plot(frequencies*60, periodogram)
-plt.xlim(0,120)
-
-
-
-
-#%%
-# plot y log
-#plt.yscale("log")
-hr_frequenies_ind = (frequencies > 0.5) & (frequencies < 2)
-hr_periodogram, hr_frequenies = periodogram[hr_frequenies_ind], frequencies[hr_frequenies_ind]
-hr_peak_ind = scipy.signal.find_peaks(hr_periodogram)[0]
-highest_hr_peak_ind = np.argsort(hr_periodogram[hr_peak_ind])[::-1][:10]
-# take highest peaks in the range 0.5-2 Hz
-
-highest_hr_peaks = hr_frequenies[hr_peak_ind[highest_hr_peak_ind]] * 60
-highest_hr_peak = highest_hr_peaks[0]
-closest_hr_peak = highest_hr_peaks[np.argmin(np.abs(highest_hr_peaks - hr_true))]
-print(highest_hr_peak,closest_hr_peak, hr_true)
-
-
-ts = acc_x
-N = 1000
-L = 600
-N = len(ts)
-K = N - L + 1
-
-L_trajectory_matrix = hankel(ts[:L], ts[L-1:]) # (L, K)
-U, Sigma, V = np.linalg.svd(L_trajectory_matrix) # (L, L); (d, ); (K, K)
-V = V.T # (K, K)
-d = len(Sigma)
-
-#%%
-V = V.T # (K, K)
-d = len(Sigma)
-
-deconstructed_ts = []
-for i in range(d):
-    X_elem = np.array(Sigma[i] * np.outer(U[:,i], V[:,i])) # (L, K)
-    X_elem_rev = X_elem[::-1] # (L, K)
-    ts_i = np.array([X_elem_rev.diagonal(i).mean() for i in range(-L+1, K)])
-    deconstructed_ts.append(ts_i)
-deconstructed_ts = np.array(deconstructed_ts) # (d, L, K)
-# %%
-import torch
-
-# Assuming acc_x is already a torch tensor on CPU
-ts = torch.Tensor(acc_x.copy())
-N = len(ts)
-L = 600
-K = N - L + 1
-
-L_trajectory_matrix = torch.tensor(hankel(ts[:L], ts[L-1:])).cuda() # (L, K)
-ts = ts.cuda()
-U, Sigma, V = torch.svd(L_trajectory_matrix)  # (K, K); (L, ); (L, L)
-V = V.T  # (L, L)
-d = Sigma.size(0)
-
-deconstructed_ts = torch.zeros((d, L, K))
-for i in range(d):
-    X_elem = Sigma[i] * torch.ger(U[:, i], V[i, :])  # (K, L)
-    X_elem_rev = torch.flip(X_elem, dims=[1])  # (K, L)
-    ts_i = torch.tensor([torch.diagonal(X_elem_rev, offset).mean() for offset in range(-L + 1, K)])
-    deconstructed_ts[i] = ts_i
-
-deconstructed_ts = deconstructed_ts.permute(1, 0, 2)  # (L, d, K) """
-# %%
-
-""" 
-troika = Troika(window_duration=10, step_duration=8, acc_sampling_freq=100, cutoff_freqs=[0.4, 5])
-
-# %%
-Y_pred, Y_true, Pids, Metrics = [], [], [], []
-
-for hr_true, hr, pid, metric in zip(Y_test, troika.transform(X_test[100:]), pid_test, metrics_test):
-    print(hr_true, hr)
-
-    Y_pred.append(hr)
-    Y_true.append(hr_true)
-    Pids.append(pid)
-    Metrics.append(metric)
-
-    with open("troika_results.csv", "a") as f:
-        f.write(f"{hr_true},{hr},{pid},{metric}\n")
-
-df_results = pd.DataFrame({"y_true": Y_true, "hr_pred": Y_pred, "pid": Pids, "metric": Metrics})
-df_results.to_pickle("troika_results.pkl")
- """

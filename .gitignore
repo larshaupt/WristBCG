@@ -13,7 +13,6 @@ log/
 data_preprocess/__pycache__/
 wandb/
 results/
-signal_processing/
 plot/
 bash_script/
 bash_sripts/

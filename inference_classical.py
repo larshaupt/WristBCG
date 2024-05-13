@@ -1,18 +1,14 @@
-#%%
+
 import os
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import config
 import wandb
-import scipy.signal
 import argparse
 import tqdm
-import pdb
-from classical_utils import *
 
+import config
+from signal_processing.classical_utils import *
 
-#%%
 
 results_dir = config.classical_results_dir
 
@@ -175,8 +171,7 @@ def parse_args():
     #return args.parse_args("--framework Troika_w_tracking --wandb_mode online".split(" "))
     return args.parse_args()
 
-#%%
+
 if __name__ == "__main__":
     args = parse_args()
     run_classical(vars(args))
-# %%

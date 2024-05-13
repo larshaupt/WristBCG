@@ -1,18 +1,14 @@
-#%%
+
 import os
 import json
 import pandas as pd
 import numpy as np
 import pickle
-import sys
-import heartpy as hp
-import ssa_hr
-from scipy.signal import find_peaks, find_peaks_cwt
-import scipy
-from scipy.signal import butter, sosfiltfilt, hilbert, correlate
-import TROIKA_bcg
-import data_utils
+from scipy.signal import butter, sosfiltfilt, hilbert, convolve, periodogram, find_peaks, find_peaks_cwt
 import matplotlib.pyplot as plt
+
+from . import TROIKA_bcg
+from . import ssa
 
 def load_subjects(dataset_dir, subject_paths, normalize=True, args=None):
     X, Y, pid, metrics = [], [], [], []
@@ -103,7 +99,7 @@ def compute_hr_bioglass(X, fs = None, **kwargs):
     if not isinstance (X, pd.DataFrame):
         X = pd.DataFrame(X, columns=["acc_x", "acc_y", "acc_z"])
     
-    df_snip_processed = data_utils.full_a_processing(X, fs, cutoff_frequencies=(0.5, 2))
+    df_snip_processed = full_a_processing(X, fs, cutoff_frequencies=(0.5, 2))
     filtered_signal = df_snip_processed["mag_filtered"]
 
     hr_rr = extract_hr_peaks(filtered_signal, fs, method="cwt")
@@ -120,7 +116,7 @@ def compute_hr_bioglass_original(X, fs = None, **kwargs):
     if not isinstance (X, pd.DataFrame):
         X = pd.DataFrame(X, columns=["acc_x", "acc_y", "acc_z"])
     
-    df_snip_processed = data_utils.full_a_processing(X, fs, cutoff_frequencies=(0.75, 2.5))
+    df_snip_processed = full_a_processing(X, fs, cutoff_frequencies=(0.75, 2.5))
     filtered_signal = df_snip_processed["mag_filtered"]
 
     hr = extract_hr_spectrum(filtered_signal, fs, cutoff_frequencies=(0.75, 2.5))
@@ -137,8 +133,8 @@ def compute_hr_ssa(X, fs = None, lagged_window_size = 501, first_n_components=20
     if not isinstance(X, np.ndarray): 
         X = X.to_numpy()
     
-    filtered_signal = ssa_hr.do_ssa_firstn(X, lagged_window_size=lagged_window_size, first_n_components=first_n_components)
-    filtered_signal = data_utils.butterworth_bandpass(filtered_signal, fs, 0.5, 2)
+    filtered_signal = ssa.do_ssa_firstn(X, lagged_window_size=lagged_window_size, first_n_components=first_n_components)
+    filtered_signal = butterworth_bandpass(filtered_signal, fs, 0.5, 2)
 
     hr_rr = extract_hr_peaks(filtered_signal, fs)
 
@@ -154,8 +150,8 @@ def compute_hr_ssa_original(X, fs = None, lagged_window_size = 501, **kwargs):
     if not isinstance(X, np.ndarray): 
         X = X.to_numpy()
     
-    filtered_signal = ssa_hr.do_ssa_axis(X, lagged_window_size=lagged_window_size)
-    filtered_signal = data_utils.butterworth_bandpass(filtered_signal, fs, 0.5, 2)
+    filtered_signal = ssa.do_ssa_axis(X, lagged_window_size=lagged_window_size)
+    filtered_signal = butterworth_bandpass(filtered_signal, fs, 0.5, 2)
 
     hr_rr = extract_hr_peaks(filtered_signal, fs, method="classical")
 
@@ -203,6 +199,35 @@ def extract_hr_spectrum(signal, fs, cutoff_frequencies=(0.5, 2)):
 
 
 
+def butterworth_bandpass(signal, fs: float, low, high, order=4, channels=["acc_x", "acc_y", "acc_z"]):
+    """
+    Apply Butterworth bandpass filter to signal data.
+
+    Args:
+    - signal (pd.DataFrame or array-like): Signal data or DataFrame with columns representing different channels.
+    - fs (float): Sampling frequency of the signal.
+    - low (float): Low cutoff frequency of the bandpass filter in Hz.
+    - high (float): High cutoff frequency of the bandpass filter in Hz.
+    - order (int, optional): Order of the Butterworth filter. Default is 4.
+    - channels (list, optional): List of channel names if signal is a DataFrame. Default is ["acc_x", "acc_y", "acc_z"].
+
+    Returns:
+    - filtered_signal (pd.DataFrame or array-like): Filtered signal data or DataFrame with filtered channels.
+    """
+    # if the input is a dataframe with acceleration signals as columns, apply the filter to each column and return the dataframe
+    if isinstance(signal, pd.DataFrame):
+        assert all([ch in signal.columns for ch in channels]), "Channels not in signal"
+        for ch in channels:
+            signal.loc[:, ch] = single_channel_butterworth_bandpass(signal[ch], fs, low, high, order=order)
+
+        return signal
+    else:
+        if signal.ndim == 2:
+            signal = np.apply_along_axis(single_channel_butterworth_bandpass, 0, signal, fs, low, high, order=order)
+        else:
+            signal = single_channel_butterworth_bandpass(signal, fs, low, high, order=order)
+
+        return signal
 
 def single_channel_butterworth_bandpass(signal, fs, low, high, order=4):
     """
@@ -248,7 +273,7 @@ def wcorr(ts1: np.ndarray, ts2: np.ndarray) -> float:
 def select_components(acc_groups, threshold=0.1):
     selected_indices = []
     for i in range(acc_groups.shape[0]):
-        _, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=4096 * 2 - 1)
+        _, periodogram = periodogram(acc_groups[i,:], nfft=4096 * 2 - 1)
         frequencies = np.linspace(0,100, 4096)
         max_amplitude = np.max(np.abs(periodogram))
         hr_frequenies = (frequencies > 0.5) & (frequencies < 4)
@@ -269,9 +294,9 @@ def compute_hr_troika_w_tracking(X, fs=100, f_low=0.5, f_high=4, **kwargs):
 
 def compute_hr_troika(X, fs=100, n_freq=4096, f_low=0.5, f_high=4, **kwargs):
 
-    acc_x = data_utils.butterworth_bandpass(X[:,0], low=f_low, high=f_high, fs=fs)
-    acc_y = data_utils.butterworth_bandpass(X[:,1], low=f_low, high=f_high, fs=fs)
-    acc_z = data_utils.butterworth_bandpass(X[:,2], low=f_low, high=f_high, fs=fs)
+    acc_x = butterworth_bandpass(X[:,0], low=f_low, high=f_high, fs=fs)
+    acc_y = butterworth_bandpass(X[:,1], low=f_low, high=f_high, fs=fs)
+    acc_z = butterworth_bandpass(X[:,2], low=f_low, high=f_high, fs=fs)
     acc_groups_x, wcorr_x = TROIKA_bcg.ssa(acc_x, 500, perform_grouping=True, ret_Wcorr=True)
     acc_groups_y, wcorr_y = TROIKA_bcg.ssa(acc_y, 500, perform_grouping=True, ret_Wcorr=True)
     acc_groups_z, wcorr_z = TROIKA_bcg.ssa(acc_z, 500, perform_grouping=True, ret_Wcorr=True)
@@ -280,7 +305,7 @@ def compute_hr_troika(X, fs=100, n_freq=4096, f_low=0.5, f_high=4, **kwargs):
     def select_components(acc_groups, threshold=0.1):
         selected_indices = []
         for i in range(acc_groups.shape[0]):
-            frequencies, periodogram = scipy.signal.periodogram(acc_groups[i,:], nfft=n_freq * 2 - 1, fs=fs)
+            frequencies, periodogram = periodogram(acc_groups[i,:], nfft=n_freq * 2 - 1, fs=fs)
             max_amplitude = np.max(np.abs(periodogram))
             hr_frequenies = (frequencies > 0.5) & (frequencies < 2)
 
@@ -302,23 +327,23 @@ def compute_hr_troika(X, fs=100, n_freq=4096, f_low=0.5, f_high=4, **kwargs):
     # differentiating for more robustness
     acc_reconstructed = np.diff(acc_reconstructed)
 
-    frequencies, periodogram = scipy.signal.periodogram(acc_reconstructed, nfft=n_freq * 2 - 1, fs=fs)
+    frequencies, periodogram = periodogram(acc_reconstructed, nfft=n_freq * 2 - 1, fs=fs)
 
 
     hr_frequenies_ind = (frequencies > 0.5) & (frequencies < 2)
     hr_periodogram, hr_frequenies = periodogram[hr_frequenies_ind], frequencies[hr_frequenies_ind]
-    hr_peak_ind = scipy.signal.find_peaks(hr_periodogram)[0]
+    hr_peak_ind = find_peaks(hr_periodogram)[0]
     highest_hr_peak_ind = np.argsort(hr_periodogram[hr_peak_ind])[::-1][:10]
 
     highest_hr_peaks = hr_frequenies[hr_peak_ind[highest_hr_peak_ind]] * 60
     highest_hr_peak = highest_hr_peaks[0]
     return highest_hr_peak
 
-#%%
+
 
 def compute_hr_kantelhardt(X, fs=100, peak_detection = "cwt", **kwargs): 
 
-    X = data_utils.butterworth_bandpass(X, low=5, high=14, fs=fs)
+    X = butterworth_bandpass(X, low=5, high=14, fs=fs)
     X = np.apply_along_axis(lambda x: np.abs(hilbert(x)), 0, X)
 
     if peak_detection == "classical":
@@ -347,7 +372,7 @@ def compute_hr_kantelhardt(X, fs=100, peak_detection = "cwt", **kwargs):
 
 def compute_hr_kantelhardt_original(X, fs=100, **kwargs): 
 
-    X = data_utils.butterworth_bandpass(X, low=5, high=14, fs=fs)
+    X = butterworth_bandpass(X, low=5, high=14, fs=fs)
     X = np.apply_along_axis(lambda x: np.abs(x + 1j*np.abs(hilbert(x))), 0, X)
 
 
@@ -388,3 +413,77 @@ def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
     plt.ylabel('Predicted HR (bpm)')
     plt.legend()
     return figure
+
+
+def full_a_processing(df_snip, fs, channels=[], cutoff_frequencies = [0.5,2.0], detrend_window_size=None):
+    """
+    Apply signal processing to a DataFrame.
+
+    Parameters:
+    df_snip (pd.DataFrame): Input DataFrame.
+    fs (float): Sampling frequency.
+    channels (list of str, optional): List of channels to process.
+    detrend_window_size (int, optional): Size of the window for detrending.
+
+    Returns:
+    pd.DataFrame: Processed DataFrame.
+    """
+    if channels == []:
+        channels = ['acc_x', 'acc_y', 'acc_z']
+    
+    channels_filtered = [a_processing(df_snip[channel], fs, detrend_window_size=detrend_window_size) for channel in channels]
+
+    mag_filtered = np.linalg.norm(np.array(channels_filtered), axis=0)
+
+    filter_sos = butter(2, cutoff_frequencies, 'bandpass', fs=fs, output='sos')
+    mag_filtered = sosfiltfilt(filter_sos, mag_filtered)
+
+    df_mag_filtered = pd.Series(mag_filtered, index=df_snip.index, name='mag_filtered')
+    df_snip = df_snip.join(df_mag_filtered)
+
+    return df_snip
+
+def a_processing(signal, fs, detrend_window_size=None):
+    """
+    Apply signal processing to remove noise and artifacts.
+
+    Parameters:
+    signal (array-like): Input signal.
+    fs (float): Sampling frequency.
+    detrend_window_size (int, optional): Size of the window for detrending.
+
+    Returns:
+    array-like: Processed signal.
+    """
+    if not detrend_window_size:
+        detrend_window_size = int(3 * fs)
+
+    signal_norm = z_normalization(signal)
+
+    signal_detrend = signal_norm - convolve(signal_norm, np.ones(detrend_window_size) / detrend_window_size, 'same')
+    sos = butter(4, [4, 11], 'bandpass', fs=fs, output='sos')
+    signal_bandpass = sosfiltfilt(sos, signal_detrend)
+    return signal_bandpass
+
+
+def z_normalization(signal, signal_mean=None, signal_std=None):
+    """
+    Perform z-score normalization on a signal.
+
+    Parameters:
+    signal (array-like): Input signal.
+
+    Returns:
+    array-like: Normalized signal.
+    """
+    if not isinstance(signal_mean, np.ndarray) or len(signal_mean) != signal.shape[1]:
+        signal_mean = signal.mean(axis=0)
+    if not isinstance(signal_std, np.ndarray) or len(signal.std) != signal.shape[1]:
+        signal_std = signal.std(axis=0)
+    if signal_std != 0:
+        signal_norm = (signal - signal_mean) / signal_std
+    else:
+        signal_norm = signal - signal_mean
+    return signal_norm
+
+
