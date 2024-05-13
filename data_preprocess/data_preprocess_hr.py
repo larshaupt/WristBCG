@@ -2,43 +2,19 @@
 Data Pre-processing on HHAR dataset.
 
 '''
-import sys
+
 import numpy as np
 import pandas as pd
-import sys
 import os
-import pdb
-from scipy.interpolate import interp1d
 import torch
 import pickle as cp
 from torch.utils.data import Dataset, DataLoader
-from data_preprocess_utils import *
 import config
-import re
 import json
-from scipy.signal import resample, periodogram, butter, sosfiltfilt
-from scipy.interpolate import interp1d
-from scipy.stats import rankdata
-import julius
-
-NUM_FEATURES = 1
+from scipy.signal import periodogram, butter, sosfiltfilt
+from .data_preprocess_utils import *
 
 
-class data_loader_hr(Dataset):
-    def __init__(self, samples, labels, domains, split = None, partition=None, dataset=None):
-
-        self.samples = samples
-        self.domains = domains
-        self.labels = labels
-        self.split = split
-        self.partition = partition
-        self.dataset = dataset
-    
-    def __getitem__(self, index):
-        sample, target, domain = self.samples[index], self.labels[index], self.domains[index]
-        return sample, target, domain
-    def __len__(self):
-        return len(self.samples)
 
 class data_loader_hr(Dataset):
     def __init__(self, samples, labels, domains, split = None, partition=None, dataset=None):
