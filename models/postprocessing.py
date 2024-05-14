@@ -24,7 +24,7 @@ class Postprocessing(nn.Module):
         self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
 
 
-    def fit_layer(self, ys, distr="laplace", sparse=False, learn_state_prior=False):
+    def fit_layer(self, *args, **kwargs):
         pass
 
 
@@ -87,16 +87,7 @@ class BeliefPPG(Postprocessing):
         super(BeliefPPG, self).__init__(dim, return_probs, uncert, method)
         self.state_prior = torch.tensor(np.ones(dim) / dim, dtype=torch.float32)
         self.state = nn.Parameter(self.state_prior.clone(), requires_grad=False)
-        #self.dim = dim
-        #self.method = method
         self.transition_prior = nn.Parameter(torch.zeros((self.dim, self.dim), dtype=torch.float32), requires_grad=False)
-        #self.return_probs = return_probs
-        #self.uncert = uncert
-        #bins = np.array([i for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]])
-        #bins = (bins[1:] + bins[:-1])/2
-        #self.bins = nn.Parameter(torch.tensor(bins, dtype=torch.float32), requires_grad=False)
-        #self.bins = nn.Parameter(torch.tensor([i for i in [-3] + list(np.linspace(0, dim, dim-1)) + [dim+3]], dtype=torch.float32), requires_grad=False)
-
 
 
     def _fit_distr(self, diffs, distr):
@@ -305,6 +296,8 @@ from filterpy.common import Q_discrete_white_noise
 class KalmanSmoothing(Postprocessing):
     def __init__(self, dim, step_size=8, noise=2, Q=1e-4, return_probs=True, uncert="std"):
         super(KalmanSmoothing, self).__init__(dim, return_probs, uncert)
+
+        # The Kalman Filter parameters were chosen and evaluated experimentally on the training dataset
         self.fk = KalmanFilter(dim_x=2, dim_z=1)
         self.fk.x = np.array([0.5, 0.])      # initial state (x and dx)
         self.fk.F = np.array([[1., step_size],

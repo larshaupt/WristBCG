@@ -2,77 +2,54 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
-import pickle as cp
-from augmentations import gen_aug
-from utils import tsne, _logger
-import time
-from models.frameworks import *
-
-from models.backbones import *
-from models.loss import *
-from models.postprocessing import Postprocessing, BeliefPPG, KalmanSmoothing
-from data_preprocess import data_preprocess_hr
-from torchmetrics.regression import LogCoshError
-from bayesian_torch.models.dnn_to_bnn import get_kl_loss
-
-from sklearn.metrics import f1_score
-import seaborn as sns
 import wandb
-from copy import deepcopy
 from tqdm import tqdm
 import pandas as pd
 import config
-import pdb
-import matplotlib.pyplot as plt
 import re
+from torchmetrics.regression import LogCoshError
+from bayesian_torch.models.dnn_to_bnn import get_kl_loss
 
+from augmentations import gen_aug
+from utils import tsne, _logger, corr_function, plot_true_pred
+from data_preprocess import data_preprocess_hr
 
-global plot_dir_name
-plot_dir_name = config.plot_dir
-if not os.path.exists(plot_dir_name):
-    os.makedirs(plot_dir_name)
+from models.frameworks import *
+from models.backbones import *
+from models.loss import *
+from models.postprocessing import Postprocessing, BeliefPPG, KalmanSmoothing
 
-def corr_function(a,b):
-    corr = pd.DataFrame({'a':a, 'b':b}).corr().iloc[0,1]
-    if np.isnan(corr):
-        return 0
-    else:
-        return corr
-
-def plot_true_pred(hr_true, hr_pred, x_lim=[20, 120], y_lim=[20, 120]):
-    figure = plt.figure(figsize=(8, 8))
-    hr_true, hr_pred = np.array(hr_true), np.array(hr_pred)
-    mae = np.round(np.abs(hr_true - hr_pred).mean(), 2)
-    correlation_coefficient = corr_function(hr_true, hr_pred)
-
-    plt.scatter(x = hr_true, y = hr_pred, alpha=0.2, label=f"MAE: {mae:.2f}, Corr: {correlation_coefficient:.2f}")
-
-    plt.plot(x_lim, y_lim, color='k', linestyle='-', linewidth=2)
-    plt.xlim(*x_lim)
-    plt.ylim(*y_lim)
-    plt.xlabel('True HR (bpm)')
-    plt.ylabel('Predicted HR (bpm)')
-    plt.legend()
-    return figure
-    
 
 def setup_dataloaders(args, mode="finetuning"):
+    """
+    Sets up data loaders for different modes of operation: pretraining, finetuning, postprocessing,
+    and postprocessing without discretization. 
 
+    Parameters:
+    args (Namespace): An argparse namespace containing the dataset parameters and configurations.
+    mode (str, optional): The mode of operation. Options are "pretraining", "finetuning", 
+                          "postprocessing", and "postprocessing_no_discrete". Defaults to "finetuning".
 
+    Returns:
+    tuple: A tuple containing the train_loader, val_loader, and test_loader.
+    
+    Raises:
+    ValueError: If the mode is not recognized.
+    """
+
+    # Configuration settings based on the selected mode
     if mode == "pretraining":
+        # Use pretraining dataset and specific pretraining settings
         dataset = args.pretrain_dataset
-        split = 0 # pretrains network always with split 0
+        split = 0  # Always use split 0 for pretraining
         subsample_rate = args.pretrain_subsample
-
-        if args.framework == "reconstruction":
-            reconstruction = True
-        else:
-            reconstruction = False
+        reconstruction = args.framework == "reconstruction"
         sample_sequences = False
         discrete_hr = False
         sigma = args.label_sigma
 
-    elif mode =="finetuning": # normal dataset, not pretraining
+    elif mode == "finetuning":
+        # Use standard dataset and finetuning settings
         dataset = args.dataset
         split = args.split
         subsample_rate = args.subsample
@@ -82,6 +59,7 @@ def setup_dataloaders(args, mode="finetuning"):
         discrete_hr = args.discretize_hr
 
     elif mode == "postprocessing":
+        # Use standard dataset with postprocessing settings
         dataset = args.dataset
         split = args.split
         subsample_rate = args.subsample
@@ -89,7 +67,9 @@ def setup_dataloaders(args, mode="finetuning"):
         sample_sequences = True
         sigma = args.label_sigma
         discrete_hr = True
+
     elif mode == "postprocessing_no_discrete":
+        # Use standard dataset with postprocessing settings, without discretization
         dataset = args.dataset
         split = args.split
         subsample_rate = args.subsample
@@ -97,38 +77,86 @@ def setup_dataloaders(args, mode="finetuning"):
         sample_sequences = True
         sigma = args.label_sigma
         discrete_hr = False
+
     else:
+        # Raise an error if the mode is not recognized
         raise ValueError(f"Mode {mode} not recognized")
 
-
-    train_loader, val_loader, test_loader = data_preprocess_hr.prep_hr(args, dataset=dataset, split=split, subsample_rate=subsample_rate, reconstruction=reconstruction, sample_sequences=sample_sequences, discrete_hr=discrete_hr, sigma=sigma)
+    # Preprocess data and prepare data loaders
+    train_loader, val_loader, test_loader = data_preprocess_hr.prep_hr(
+        args, 
+        dataset=dataset, 
+        split=split, 
+        subsample_rate=subsample_rate, 
+        reconstruction=reconstruction, 
+        sample_sequences=sample_sequences, 
+        discrete_hr=discrete_hr, 
+        sigma=sigma
+    )
     
-
     return train_loader, val_loader, test_loader
 
-
 def setup_linclf(args, DEVICE, bb_dim):
-    '''
-    @param bb_dim: output dimension of the backbone network
-    @return: a linear classifier
-    '''
+    """
+    Sets up a linear classifier based on the provided arguments and device configuration.
 
+    Parameters:
+    args (Namespace): An argparse namespace containing model parameters and configurations.
+    DEVICE (torch.device): The device on which the model will be run (e.g., CPU or GPU).
+    bb_dim (int): The output dimension of the backbone network.
+
+    Returns:
+    torch.nn.Module: A linear classifier configured based on the provided arguments.
+    """
+    
+    # Determine the classifier type based on the backbone and framework
     if args.backbone in ['CNN_AE'] and args.framework == 'reconstruction':
-        classifier = LSTM_Classifier(bb_dim=bb_dim, n_classes=args.n_class, rnn_type=args.rnn_type, num_layers=args.num_layers_classifier)
-    else:
+        # In this case the backbone is only the convolutional layers
+        # Use LSTM classifier for reconstruction with CNN_AE backbone
+        classifier = LSTM_Classifier(
+            bb_dim=bb_dim, 
+            n_classes=args.n_class, 
+            rnn_type=args.rnn_type, 
+            num_layers=args.num_layers_classifier
+        )
+    else: # backbone is convolutional and RNN layers
         if args.model_uncertainty == "NLE":
-            classifier = Classifier_with_uncertainty(bb_dim=bb_dim, n_classes=args.n_class, num_layers=args.num_layers_classifier)
+            # Use classifier with uncertainty estimation, i.e. a second head for uncertainty
+            classifier = Classifier_with_uncertainty(
+                bb_dim=bb_dim, 
+                n_classes=args.n_class, 
+                num_layers=args.num_layers_classifier
+            )
         else:
-            classifier = Classifier(bb_dim=bb_dim, n_classes=args.n_class, num_layers=args.num_layers_classifier)
+            # Use standard classifier
+            classifier = Classifier(
+                bb_dim=bb_dim, 
+                n_classes=args.n_class, 
+                num_layers=args.num_layers_classifier
+            )
 
+    # Move the classifier to the specified device
     classifier = classifier.to(DEVICE)
     return classifier
 
 
 def setup_model_optm(args, DEVICE):
 
+    """
+    Sets up the model and optimizer(s) based on the provided arguments and device configuration.
+
+    Parameters:
+    args (Namespace): An argparse namespace containing model parameters and configurations.
+    DEVICE (torch.device): The device on which the model will be run (e.g., CPU or GPU).
+
+    Returns:
+    tuple: A tuple containing the model and a list of optimizers.
+    """
+
     # set up backbone network
-    if "bnn" in args.model_uncertainty:
+
+
+    if "bnn" in args.model_uncertainty: # Bayesian Neural Network
 
         if args.backbone == "CorNET":
 
@@ -220,26 +248,18 @@ def setup_model_optm(args, DEVICE):
                                    mlp_dim=64, 
                                    dropout=0.1, 
                                    backbone=True)
-        elif args.backbone == "CorNET":
-            if args.add_frequency:
-                backbone = CorNETFrequency(n_channels=args.n_feature, 
-                                           n_classes=args.n_class, 
-                                           conv_kernels=args.num_kernels, 
-                                           kernel_size=args.kernel_size, 
-                                           LSTM_units=args.lstm_units,
-                                           backbone=True, 
-                                           input_size=args.input_length, 
-                                           num_extra_features=args.n_feature)
-            else:
-                backbone = CorNET(n_channels=args.n_feature, 
-                                  n_classes=args.n_class, 
-                                  conv_kernels=args.num_kernels, 
-                                  kernel_size=args.kernel_size, 
-                                  LSTM_units=args.lstm_units, 
-                                  backbone=True, 
-                                  input_size=args.input_length, 
-                                  rnn_type=args.rnn_type,
-                                  dropout_rate=args.dropout_rate)
+            
+        elif args.backbone == "CorNET": # CorNET, 
+            backbone = CorNET(n_channels=args.n_feature, 
+                                n_classes=args.n_class, 
+                                conv_kernels=args.num_kernels, 
+                                kernel_size=args.kernel_size, 
+                                LSTM_units=args.lstm_units, 
+                                backbone=True, 
+                                input_size=args.input_length, 
+                                rnn_type=args.rnn_type,
+                                dropout_rate=args.dropout_rate)
+            
         elif args.backbone == "AttentionCorNET":
             backbone = AttentionCorNET(n_channels=args.n_feature, 
                                        n_classes=args.n_class, 
@@ -249,6 +269,17 @@ def setup_model_optm(args, DEVICE):
                                        backbone=True, 
                                        input_size=args.input_length, 
                                        rnn_type=args.rnn_type)
+            
+        elif args.backbone == "FrequencyCorNET":
+            backbone = CorNETFrequency(n_channels=args.n_feature, 
+                                           n_classes=args.n_class, 
+                                           conv_kernels=args.num_kernels, 
+                                           kernel_size=args.kernel_size, 
+                                           LSTM_units=args.lstm_units,
+                                           backbone=True, 
+                                           input_size=args.input_length, 
+                                           num_extra_features=args.n_feature)
+            
         elif args.backbone == "TCN":
             backbone = TemporalConvNet(num_channels=[32, 64, 128], 
                                        n_classes=args.n_class,  
@@ -381,6 +412,8 @@ def setup_args(args):
         args.batch_size = min(args.batch_size, 128)
     elif args.backbone == "HRCTPNet":
         args.scheduler_finetune = "WarmupRoot"
+    elif args.backbone == "FrequencyCorNET":
+        args.add_frequency = True
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -419,7 +452,6 @@ def setup_args(args):
     model_name_opt += f"_stepsize_{args.step_size}" if args.step_size != 8 else ""
     model_name_opt += f"_szfactor_test_{args.take_every_nth_test}" if args.take_every_nth_test != 1 else ""
     model_name_opt += f"_szfactor_train_{args.take_every_nth_train}" if args.take_every_nth_train != 1 else ""
-    model_name_opt += f"_wfrequency" if args.add_frequency else ""
     model_name_opt += f"_{args.rnn_type}" if args.rnn_type != "lstm" else ""
     args.model_name = 'try_scheduler_' + args.framework + '_backbone_' + args.backbone +'_pretrain_' + args.pretrain_dataset + '_eps' + str(args.pretrain_n_epoch) + '_lr' + str(args.lr_pretrain) + '_bs' + str(args.pretrain_batch_size) \
                       + '_aug1' + args.aug1 + '_aug2' + args.aug2 + '_dim-pdim' + str(args.p) + '-' + str(args.phid) \

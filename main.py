@@ -79,7 +79,7 @@ def get_parser():
 
     # framework
     parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction', 'median', 'subject_median', 'oxford'], help='name of framework')
-    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', 'HRCTPNet', "ResNET"], help='name of backbone network')
+    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', "FrequencyCorNET", 'HRCTPNet', "ResNET"], help='name of backbone network')
     parser.add_argument('--num_kernels', type=int, default=32, help='number of kernels in CNN')
     parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
     parser.add_argument('--lstm_units', type=int, default=128, help='number of units in LSTM')

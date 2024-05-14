@@ -44,7 +44,7 @@ def load_data(data_path,
               sampling_rate = None):
 
     if sampling_rate == None or sampling_rate == 0:
-            sampling_rate = 100 # since we are nromalizing the spectrogram later anyway, we can use any sampling rate
+            sampling_rate = 100 # since we are normalizing the spectrogram later anyway, we can use any sampling rate
 
 
     if args is not None: # taking the parameters from the args

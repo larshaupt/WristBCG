@@ -10,7 +10,11 @@ import copy
 
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+"""
+Taken from Yuan et al. Self-supervised Learning for Human Activity Recognition Using 700,000 Person-days of Wearable Data
+https://github.com/OxWearables/ssl-wearables
 
+"""
 # https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py
 class Classifier(nn.Module):
     def __init__(self, input_size=1024, output_size=2):
