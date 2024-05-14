@@ -289,22 +289,47 @@ def ifft_amp_phase_pert_fully(sample):
 
 
 def bioglass(sample, fs=100):
-    # https://ieeexplore.ieee.org/document/7015908
-
+    """
+    https://ieeexplore.ieee.org/document/7015908
+    Process a 3D sample array through a series of signal processing steps to filter and transform the data.
+    
+    Args:
+        sample (numpy.ndarray): A 3D numpy array (samples, timepoints, channels) representing the signal data.
+        fs (int, optional): The sampling frequency of the signal. Default is 100 Hz.
+    
+    Returns:
+        numpy.ndarray: The processed 3D numpy array after detrending, filtering, and normalization.
+    """
+    
+    # Get the dimensions of the input sample
     dimensions = sample.shape
 
+    # Define the window size for detrending (3 seconds worth of data)
     detrend_window_size = int(3 * fs)
 
-    sample = sample - np.apply_along_axis(scipy.signal.convolve, 1, sample, np.ones(detrend_window_size) / detrend_window_size, mode='same')
+    # Detrend the signal by subtracting the local mean (moving average) along the time axis
+    sample = sample - np.apply_along_axis(
+        scipy.signal.convolve, 1, sample, 
+        np.ones(detrend_window_size) / detrend_window_size, 
+        mode='same'
+    )
+    
+    # Design a 4th order Butterworth bandpass filter (4-11 Hz)
     sos = scipy.signal.butter(4, [4, 11], 'bandpass', fs=fs, output='sos')
+    
+    # Apply the bandpass filter to the signal along the time axis
     sample = scipy.signal.sosfiltfilt(sos, sample, axis=1)
 
-    
+    # Compute the Euclidean norm across the channels
     sample = np.linalg.norm(sample, axis=2)
 
+    # Design a 2nd order Butterworth bandpass filter (0.5-2.0 Hz)
     filter_sos = scipy.signal.butter(2, [0.5, 2.0], 'bandpass', fs=fs, output='sos')
+    
+    # Apply the second bandpass filter to the signal along the time axis
     sample = scipy.signal.sosfiltfilt(filter_sos, sample, axis=1)
 
-    sample = np.stack([sample]*dimensions[2], axis=2)
+    # Replicate the single-channel data across the original number of channels
+    sample = np.stack([sample] * dimensions[2], axis=2)
 
     return sample

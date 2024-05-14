@@ -14,11 +14,10 @@ from models.backbones import *
 from models.loss import *
 from trainer import *
 from argparse import Namespace
-import classical_utils
 from main import get_parser
 
 
-image_save_dir = "/local/home/lhauptmann/thesis/images/thesis"
+image_save_dir = config.plot_dir
 #%%
 
 def get_gpu_info():

@@ -12,7 +12,7 @@ from models.backbones import *
 from models.loss import *
 from trainer import *
 from argparse import Namespace
-import classical_utils
+from signal_processing import classical_utils
 from main import get_parser
 metric_names = ["Angle Changes", "Absolute Max", "STD", "Mean", "MAD"]
 
