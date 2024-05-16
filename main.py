@@ -12,10 +12,10 @@ def get_parser():
     # Parse command line arguments
     ##################
     parser = argparse.ArgumentParser(description='argument setting of network')
-    parser.add_argument('--cuda', default=-1, type=int, help='cuda device ID，0/1')
+    parser.add_argument('--cuda', default=-1, type=int, help='cuda device ID')
     parser.add_argument('--num_workers', default=0, type=int, help='number of workers for data loading')
-    parser.add_argument('--random_seed', default=10, type=int, help='random seed')
-    parser.add_argument('--pretrain', default=0, type=int, help='if or not to pretrain')
+    parser.add_argument('--random_seed', default=10, type=int, help='random seed for training')
+    parser.add_argument('--pretrain', type=int, default=0, help='if or not to pretrain')
     parser.add_argument('--finetune', type=int, default=1, help='if or not to finetune')
 
 
@@ -24,52 +24,81 @@ def get_parser():
     parser.add_argument('--batch_size', type=int, default=512, help='batch size of training')
     parser.add_argument('--n_epoch', type=int, default=60, help='number of training epochs')
     parser.add_argument('--pretrain_n_epoch', type=int, default=60, help='number of training epochs for pretraining')
-
     parser.add_argument('--lr_pretrain', type=float, default=1e-4, help='learning rate for pretrain')
     parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-7, help='weight decay')
     parser.add_argument('--weight_decay_pretrain', type=float, default=1e-7, help='weight decay for pretrain')
     parser.add_argument('--scheduler', type=bool, default=False, help='if or not to use a scheduler')
     parser.add_argument('--scheduler_finetune', type=bool, default=False, help='if or not to use a scheduler for finetuning/supervised learning')
-    parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam'], help='optimizer')
+    parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam'], help='optimizer for finetuning')
     parser.add_argument('--loss', type=str, default='MAE', choices=['MSE', 'MAE', 'Huber', 'LogCosh', 'CrossEntropy', 'NLE'], help='loss function')
-    parser.add_argument('--huber_delta', type=float, default=0.1, help='delta for Huber loss')
 
     # dataset
-    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['ucihar', 'max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2', 'appleall'], help='name of dataset')
+    parser.add_argument('--dataset', type=str, default='appleall', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
+    parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2', 'appleall'], help='name of dataset')
     parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
-    parser.add_argument('--normalize', type=bool, default=True, help='if or not to normalize data')
-    parser.add_argument('--dataset', type=str, default='apple100', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
-    parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast", "NLE", "ensemble"], help='which method to use to output a probability distribution')
-    parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
+    parser.add_argument('--normalize', type=bool, default=True, help='if or not to z-normalize data')
     parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')
-    parser.add_argument('--subsample_ranked_train', type=float, default=0.0, help='amount of data to use for training, 0.0 means default dataset')
-    parser.add_argument('--subsample_ranked_val', type=float, default=0.0, help='amount of data to use for validation and testing,  0.0 means default dataset')
-    parser.add_argument('--n_feature', type=int, default=3, help='name of feature dimension')
-    parser.add_argument('--n_class', type=int, default=1, help='number of class')
-    parser.add_argument('--n_prob_class', type=int, default=64, help='number of class for probability distribution')
-    parser.add_argument('--split', type=int, default=0, help='split number')
-    parser.add_argument('--split_by', type=str, default='subject', choices=['subject', 'time'], help='split by subject or time')
+    parser.add_argument('--split', type=int, default=0, help='split number, needs to have split file')
+    parser.add_argument('--split_by', type=str, default='subject', choices=['subject', 'time'], help='split by subject or time, needs to have split file')
+
+    # dataset characteristics
     parser.add_argument('--hr_min', type=float, default=30, help='minimum heart rate for training, not needed for pretraining')
     parser.add_argument('--hr_max', type=float, default=120, help='maximum heart rate for training, not needed for pretraining')
-    parser.add_argument('--sampling_rate', type=int, default=0, help='sampling rate of the data. Warning: this will take longer time to load data')
-    parser.add_argument('--lr_finetune_backbone', type=float, default=1e-5, help='learning rate for finetuning the backbone network')
-    parser.add_argument('--lr_finetune_lstm', type=float, default=1e-4, help='learning rate for finetuning the lstm layer')
-    parser.add_argument('--num_layers_classifier', type=int, default=1, help='number of layers in the classifier')
-    parser.add_argument('--window_size', type=int, default=10, help='window size for the dataset in seconds')
-    parser.add_argument('--step_size', type=int, default=8, help='step size for the dataset in seconds')
     parser.add_argument('--take_every_nth_test', type=int, default=1, help='take every nth test sample, similar to increasing step size')
     parser.add_argument('--take_every_nth_train', type=int, default=1, help='take every nth train sample, similar to increasing step size')
+    parser.add_argument('--bandpass_freq_min', type=float, default=0.1, help='minimum frequency for bandpass filter')
+    parser.add_argument('--bandpass_freq_max', type=float, default=18, help='maximum frequency for bandpass filter')
+
+    # ablations
+    parser.add_argument('--sampling_rate', type=int, default=0, help='sampling rate of the data. Warning: this will take longer time to load data')
+    parser.add_argument('--window_size', type=int, default=10, help='window size for the dataset in seconds')
+    parser.add_argument('--step_size', type=int, default=8, help='step size for the dataset in seconds')
+
+    # data filtering by thresholds, default 0 means no filtering
     parser.add_argument('--data_thr_avg', type=float, default=0, help='threshold for input signal average')
     parser.add_argument('--data_thr_max', type=float, default=0, help='threshold for input signal max')
     parser.add_argument('--data_thr_angle', type=float, default=0, help='threshold for input signal angle')
     parser.add_argument('--data_thr_hr', type=float, default=0, help='threshold for input signal heart rate quality')
-    parser.add_argument('--add_frequency', type=bool, default=False, help='if or not to add frequency to the input signal')
-    parser.add_argument('--bandpass_freq_min', type=float, default=0.1, help='minimum frequency for bandpass filter')
-    parser.add_argument('--bandpass_freq_max', type=float, default=18, help='maximum frequency for bandpass filter')
-    parser.add_argument('--hr_smoothing', type=int, default=1, help='smoothing of heart rate, window size')
+    
+    # framework
+    parser.add_argument('--framework', type=str, default='supervised', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction', 'median', 'subject_median', 'oxford'], help='name of framework')
+    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', "FrequencyCorNET", 'HRCTPNet', "ResNET"], help='name of backbone network')
+    parser.add_argument('--num_kernels', type=int, default=32, help='number of kernels in CNN')
+    parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
+    parser.add_argument('--lstm_units', type=int, default=128, help='number of units in LSTM')
+    parser.add_argument('--rnn_type', type=str, default="gru", choices=["lstm", "lstm_bi", "gru", "gru_bi"], help='direction of LSTM')
+    parser.add_argument('--num_layers_classifier', type=int, default=1, help='number of layers in the classifier')
     parser.add_argument('--dropout_rate', type=float, default=0.3, help='dropout rate')
-    # augmentation
+
+    # uncertainty
+    parser.add_argument('--model_uncertainty', type=str, default="none", choices=["none", "gaussian_classification", "mcdropout", "bnn", "bnn_pretrained", "bnn_pretrained_firstlast", "NLE", "ensemble"], help='which method to use to output a probability distribution')
+    parser.add_argument('--label_sigma', type=float, default=3.0, help='sigma for gaussian classification')
+
+    # postprocessing
+    # sumprod and beliefppg are the same, just for compatibility
+    parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg', 'kalmansmoothing', 'raw', 'sumprod', "viterbi"], help='postprocessing method')
+    parser.add_argument('--transition_distribution', type=str, default='laplace', choices=['gauss', 'laplace'], help='transition distribution for belief ppg')
+    parser.add_argument('--n_prob_class', type=int, default=64, help='number of class for probability distribution')
+
+    # log
+    parser.add_argument('--wandb_mode', type=str, default='online', choices=['offline', 'online', 'disabled', 'dryrun', 'run'],  help='wandb mode')
+    parser.add_argument('--wandb_group', type=str, default='', help='wandb group')
+    parser.add_argument('--wandb_project', type=str, default='hr_ssl', help='wandb project')
+    parser.add_argument('--wandb_tag', type=str, default='', help='wandb name')
+
+    # ssl  - finetune
+    parser.add_argument('--lr_finetune_backbone', type=float, default=1e-5, help='learning rate for finetuning the backbone network')
+    parser.add_argument('--lr_finetune_lstm', type=float, default=1e-4, help='learning rate for finetuning the lstm layer')
+
+    # ssl - general
+    parser.add_argument('--p', type=int, default=128,
+                        help='byol: projector size, simsiam: projector output size, simclr: projector output size')
+    parser.add_argument('--phid', type=int, default=128,
+                        help='byol: projector hidden size, simsiam: predictor hidden size, simclr: na')
+    parser.add_argument('--criterion', type=str, default='cos_sim', choices=['cos_sim', 'NTXent', 'MSE', 'MAE'],
+                        help='type of loss function for contrastive learning')
+    # ssl - augmentation
     parser.add_argument('--aug1', type=str, default='jit_scal',
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
                         help='the type of augmentation transformation')
@@ -77,42 +106,16 @@ def get_parser():
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
                         help='the type of augmentation transformation')
 
-    # framework
-    parser.add_argument('--framework', type=str, default='byol', choices=['byol', 'simsiam', 'simclr', 'nnclr', 'tstcc', 'supervised', 'reconstruction', 'median', 'subject_median', 'oxford'], help='name of framework')
-    parser.add_argument('--backbone', type=str, default='CorNET', choices=['FCN', 'DCL', 'LSTM', 'AE', 'CNN_AE', 'Attention_CNN_AE', 'Transformer', 'CorNET', 'AttentionCorNET', "FrequencyCorNET", 'HRCTPNet', "ResNET"], help='name of backbone network')
-    parser.add_argument('--num_kernels', type=int, default=32, help='number of kernels in CNN')
-    parser.add_argument('--kernel_size', type=int, default=16, help='kernel size in CNN')
-    parser.add_argument('--lstm_units', type=int, default=128, help='number of units in LSTM')
-    parser.add_argument('--rnn_type', type=str, default="gru", choices=["lstm", "lstm_bi", "gru", "gru_bi"], help='direction of LSTM')
-    parser.add_argument('--criterion', type=str, default='cos_sim', choices=['cos_sim', 'NTXent', 'MSE', 'MAE'],
-                        help='type of loss function for contrastive learning')
-    parser.add_argument('--p', type=int, default=128,
-                        help='byol: projector size, simsiam: projector output size, simclr: projector output size')
-    parser.add_argument('--phid', type=int, default=128,
-                        help='byol: projector hidden size, simsiam: predictor hidden size, simclr: na')
 
-    # postprocessing
-    # sumprod and beliefppg are the same, just for compatibility
-    parser.add_argument('--postprocessing', type=str, default='none', choices=['none', 'beliefppg', 'kalmansmoothing', 'raw', 'sumprod', "viterbi"], help='postprocessing method')
-    parser.add_argument('--transition_distribution', type=str, default='laplace', choices=['gauss', 'laplace'], help='transition distribution for belief ppg')
-
-
-    # log
-    parser.add_argument('--logdir', type=str, default='log/', help='log directory')
-    parser.add_argument('--wandb_mode', type=str, default='online', choices=['offline', 'online', 'disabled', 'dryrun', 'run'],  help='wandb mode')
-    parser.add_argument('--wandb_group', type=str, default='', help='wandb group')
-    parser.add_argument('--wandb_project', type=str, default='hr_ssl', help='wandb project')
-    parser.add_argument('--wandb_tag', type=str, default='', help='wandb name')
-
-    # byol
+    # ssl - byol
     parser.add_argument('--lr_mul', type=float, default=10.0,
                         help='lr multiplier for the second optimizer when training byol')
     parser.add_argument('--EMA', type=float, default=0.996, help='exponential moving average parameter')
 
-    # nnclr
+    # ssl - nnclr
     parser.add_argument('--mmb_size', type=int, default=1024, help='maximum size of NNCLR support set')
 
-    # TS-TCC
+    # ssl - TS-TCC
     parser.add_argument('--lambda1', type=float, default=1.0, help='weight for temporal contrastive loss')
     parser.add_argument('--lambda2', type=float, default=1.0, help='weight for contextual contrastive loss, also used as the weight for reconstruction loss when AE or CAE being backbone network')
     parser.add_argument('--temp_unit', type=str, default='tsfm', choices=['tsfm', 'lstm', 'blstm', 'gru', 'bgru'], help='temporal unit in the TS-TCC')
@@ -146,7 +149,7 @@ if __name__ == '__main__':
 
     
     DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
-    # setup model, optimizer, scheduler, criterion, logger
+    # setup model, optimizer, scheduler, criterion
     args = setup_args(args)
     initial_mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
     train_loader, val_loader, test_loader = setup_dataloaders(args, mode=initial_mode)
@@ -159,7 +162,7 @@ if __name__ == '__main__':
         exit()
         
 
-    model, optimizers, schedulers, criterion, logger = setup(args, DEVICE)
+    model, optimizers, schedulers, criterion = setup(args, DEVICE)
 
     # save config file
     config_file = os.path.join(args.lincl_model_file.replace("bestmodel.pt", "config.json"))
@@ -175,11 +178,11 @@ if __name__ == '__main__':
         # setup dataloader for pretraining
         #train_loader, val_loader, test_loader = setup_dataloaders(args, mode="pretraining")
         print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
-        pretrain_model_weights = train(train_loader, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args)
+        pretrain_model_weights = train(train_loader, val_loader, model, DEVICE, optimizers, schedulers, criterion, args)
         model.load_state_dict(pretrain_model_weights)
 
         if len(test_loader) != 0:
-            test(test_loader, model, logger, DEVICE, criterion, args)
+            test(test_loader, model, DEVICE, criterion, args)
 
     else: # no pretraining, load previously trained model
         if args.framework == 'supervised':
@@ -217,11 +220,11 @@ if __name__ == '__main__':
         optimizer_cls.param_groups[1]['lr'] = args.lr_finetune_lstm
         optimizer_cls.add_param_group({'params': trained_backbone.classifier.parameters(), 'lr': args.lr})
         
-        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, logger, DEVICE, optimizer_cls, criterion_cls, scheduler_cls, args)
+        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, EVICE, optimizer_cls, criterion_cls, scheduler_cls, args)
         trained_backbone.load_state_dict(trained_backbone_weights)
 
         if len(test_loader) != 0:
-            test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion_cls, args)
+            test_lincls(test_loader, trained_backbone, DEVICE, criterion_cls, args)
 
     elif args.postprocessing != 'none':
         classifier = setup_linclf(args, DEVICE, trained_backbone.out_dim)
@@ -244,8 +247,8 @@ if __name__ == '__main__':
         
         postprocessing_model = train_postprocessing(train_loader, postprocessing_model, DEVICE, args)
 
-        test_postprocessing(val_loader, trained_backbone, postprocessing_model,  logger, DEVICE, criterion_post, args, prefix='Val')
-        test_postprocessing(test_loader, trained_backbone, postprocessing_model, logger, DEVICE, criterion_post, args, prefix='Test')
+        test_postprocessing(val_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, args, prefix='Val')
+        test_postprocessing(test_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, args, prefix='Test')
         
 
 

@@ -101,9 +101,8 @@ Refer to ```augmentations.py```
   - ap\_f
 
 ## Utils
-- logger
+- WandB
 - t-SNE
-- MDS
 
 
 ## Reference

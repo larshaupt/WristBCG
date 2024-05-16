@@ -11,7 +11,7 @@ from torchmetrics.regression import LogCoshError
 from bayesian_torch.models.dnn_to_bnn import get_kl_loss
 
 from augmentations import gen_aug
-from utils import tsne, _logger, corr_function, plot_true_pred
+from utils import tsne, corr_function, plot_true_pred
 from data_preprocess import data_preprocess_hr
 
 from models.frameworks import *
@@ -380,7 +380,8 @@ def setup_model_optm(args, DEVICE):
 
 def setup_args(args):
 
-        
+    args.n_class = args.n_prob_class if args.model_uncertainty == "gaussian_classification" else args.n_class
+
     if args.lr_finetune_lstm == -1:
         args.lr_finetune_lstm = args.lr_finetune_backbone
 
@@ -389,7 +390,6 @@ def setup_args(args):
 
     if args.model_uncertainty == "gaussian_classification":
         args.discretize_hr = True
-        args.n_class = args.n_prob_class
         args.loss = "CrossEntropy" # this achieves better calibration, still need to evaluate why
     elif args.model_uncertainty == "NLE":
         args.loss = "NLE"
@@ -412,8 +412,8 @@ def setup_args(args):
         args.batch_size = min(args.batch_size, 128)
     elif args.backbone == "HRCTPNet":
         args.scheduler_finetune = "WarmupRoot"
-    elif args.backbone == "FrequencyCorNET":
-        args.add_frequency = True
+
+    args.add_frequency = True if args.backbone == "FrequencyCorNET" else False
 
     # set up default hyper-parameters
     if args.framework == 'byol':
@@ -466,11 +466,9 @@ def setup_args(args):
 
     lincl_model_name_opt = ""
     lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty not in ["none", "mcdropout", "ensemble"] else ""
-    lincl_model_name_opt += f"_trainranked_{args.subsample_ranked_train}" if args.subsample_ranked_train not in [None, 0.0] else ""
     lincl_model_name_opt += f"_subsample_{args.subsample:.3f}" if args.subsample != 1 else ""
     lincl_model_name_opt += f"_timesplit" if args.split_by == "time" else ""
     lincl_model_name_opt += f"_disc_hr_{args.n_class}" if args.discretize_hr else ""
-    lincl_model_name_opt += f"_hrsmoothing_{args.hr_smoothing}" if args.hr_smoothing > 1 else ""
     lincl_model_name_opt += f"_lr_{args.lr_finetune_backbone:.1E}" if args.lr_finetune_backbone != args.lr else ""
     lincl_model_name_opt += f"_lr_lstm_{args.lr_finetune_lstm:.1E}" if args.lr_finetune_lstm != args.lr_finetune_backbone else ""
     lincl_model_name_opt += f"_hrmin_{args.hr_min}" if args.hr_min != 50 else ""
@@ -504,14 +502,6 @@ def setup(args, DEVICE):
         criterion = nn.MSELoss()
     elif args.criterion == 'MAE':
         criterion = nn.L1Loss()
-
-
-    # log
-    if os.path.isdir(args.logdir) == False:
-        os.makedirs(args.logdir)
-    log_file_name = os.path.join(args.logdir, args.model_name + f".log")
-    logger = _logger(log_file_name)
-    logger.debug(args)
 
 
     # Initialize W&B
@@ -548,7 +538,7 @@ def setup(args, DEVICE):
     wandb.log({"Total_Params": total_params}, step=0)
 
 
-    return model, optimizers, schedulers, criterion, logger
+    return model, optimizers, schedulers, criterion
 
 def setup_classifier(args, DEVICE, backbone):
 
@@ -586,7 +576,7 @@ def setup_classifier(args, DEVICE, backbone):
     elif args.loss == 'MAE':
         criterion_cls = nn.L1Loss()
     elif args.loss == 'Huber':
-        criterion_cls = nn.HuberLoss(delta=args.huber_delta)
+        criterion_cls = nn.HuberLoss(delta=0.1)
     elif args.loss == 'LogCosh':
         criterion_cls = LogCoshError()
     elif args.loss == 'CrossEntropy':
@@ -657,7 +647,7 @@ def calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=N
     return loss
 
 
-def train(train_loader, val_loader, model, logger, DEVICE, optimizers, schedulers, criterion, args):
+def train(train_loader, val_loader, model, DEVICE, optimizers, schedulers, criterion, args):
     # training and validation
     best_model = None
     min_val_loss = 1e8
@@ -695,7 +685,6 @@ def train(train_loader, val_loader, model, logger, DEVICE, optimizers, scheduler
         #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
         #torch.save({'model_state_dict': model.state_dict()}, model_dir)
 
-        logger.debug(f'Train Loss     : {total_loss / n_batches:.4f}')
         wandb.log({'pretrain_training_loss': total_loss / n_batches}, step=epoch)
 
         if val_loader is None:
@@ -720,7 +709,6 @@ def train(train_loader, val_loader, model, logger, DEVICE, optimizers, scheduler
                     print('update: Saving model at {} epoch to {}'.format(epoch, model_dir))
                     torch.save({'model_state_dict': model.state_dict()}, model_dir)
                     
-                logger.debug(f'Val Loss     : {total_loss / n_batches:.4f}')
                 wandb.log({"pretrain_validation_loss": total_loss / n_batches}, step=epoch)
                 
     return best_model
@@ -765,7 +753,7 @@ def load_best_lincls(args, device=None):
 
 
 
-def test(test_loader, model, logger, DEVICE, criterion, args):
+def test(test_loader, model, DEVICE, criterion, args):
     with torch.no_grad():
         model.eval()
         total_loss = 0
@@ -777,7 +765,6 @@ def test(test_loader, model, logger, DEVICE, criterion, args):
                 n_batches += 1
                 loss = calculate_model_loss(args, sample, target, model, criterion, DEVICE, recon=recon, nn_replacer=nn_replacer)
                 total_loss += loss.item()
-        logger.debug(f'Test Loss     : {total_loss / n_batches:.4f}')
         wandb.log({"pretrain_test_loss": total_loss / n_batches})
 
 
@@ -886,7 +873,7 @@ def convert_to_hr(values, args):
     return values
 
 
-def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, optimizer, criterion, scheduler, args):
+def train_lincls(train_loader, val_loader, trained_backbone , DEVICE, optimizer, criterion, scheduler, args):
     best_model = None
     min_val_corr = -1
     best_model = copy.deepcopy(trained_backbone.state_dict())
@@ -917,12 +904,6 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
         if len(train_loader) != 0:
             train_loss = train_loss / len(train_loader)
         corr_train = corr_function(hr_true, hr_pred)
-        #model_dir = os.path.join(args.model_dir_name, 'lincls_' + args.model_name + '_' + args.dataset + "_split" + str(args.split) + "_" + str(epoch) + '.pt')
-        #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
-        #torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': classifier.state_dict()}, model_dir)
-
-
-        logger.debug(f'Train Loss     : {train_loss:.4f}\t | \tTrain MAE     : {mae_train:2.4f}\t | \tTrain Corr     : {corr_train:2.4f}\n')
         wandb.log({'Train_Loss': train_loss, 'Train_MAE': mae_train, 'Train_Corr': corr_train}, step=epoch)
 
 
@@ -935,7 +916,6 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                 torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, args.lincl_model_file)
         else:
             with torch.no_grad():
-                trained_backbone.eval() # TODO: remove this
                 val_loss = 0
                 n_batches = 0
                 hr_true, hr_pred, pids = [], [], []
@@ -962,11 +942,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
                     "hr_pred": hr_pred,
                     "pid": pids
                     })
-                
-                #wandb.log({"hr_true_vs_pred_val": wandb.Table(dataframe = pd.DataFrame(logging_table))}, step=epoch)
-                #figure = plot_true_pred(hr_true, hr_pred, x_lim=[args.hr_min, args.hr_max], y_lim=[args.hr_min, args.hr_max])
-                #wandb.log({"true_pred_val": figure}, step=epoch)
-                logger.debug(f'Val Loss     : {val_loss:.4f}, Val MAE     : {mae_val:.4f}, Val Corr     : {corr_val:.4f}\n')
+
                 wandb.log({'Val_Loss': val_loss, 'Val_MAE': mae_val, 'Val_Corr': corr_val}, step=epoch)
                 if corr_val >= min_val_corr:
                     min_val_corr = corr_val
@@ -978,7 +954,7 @@ def train_lincls(train_loader, val_loader, trained_backbone, logger , DEVICE, op
     return best_model
 
 
-def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args):
+def test_lincls(test_loader, trained_backbone, DEVICE, criterion, args):
 
     total_loss = 0
     feats = None
@@ -1028,7 +1004,6 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args):
         mae_test = np.abs(hr_true - hr_pred).mean()
         corr_val = corr_function(hr_true, hr_pred)
         wandb.log({'Test_Loss': total_loss, 'Test_MAE': mae_test, "Test_Corr": corr_val})
-        logger.debug(f'Test Loss     : {total_loss:.4f}, Test MAE     : {mae_test:.4f}, Test Corr     : {corr_val:.4f}\n')
         print('Saving results to {}'.format(args.predictions_dir_test))
         logging_table.to_pickle(args.predictions_dir_test)
 
@@ -1037,7 +1012,7 @@ def test_lincls(test_loader, trained_backbone, logger, DEVICE, criterion, args):
         tsne(feats, hr_true, save_dir=args.tsne_dir)
         print('tSNE plot saved to ', args.tsne_dir)
 
-def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, criterion_cls, args, prefix="Test"):
+def test_postprocessing(test_loader, model, postprocessing, DEVICE, criterion_cls, args, prefix="Test"):
     hr_true, hr_pred, hr_pred_post, pids, uncertainties, probs, probs_post, target_probs = [], [], [], [], [], [], [], []
     total_loss = 0
     with torch.no_grad():
@@ -1094,7 +1069,6 @@ def test_postprocessing(test_loader, model, postprocessing, logger, DEVICE, crit
             ece_post = ece_loss(probs_post, target_probs)
             nll_post = nll_loss(probs_post, target_probs)
             wandb.log({f'{prefix}_Loss': total_loss, f'{prefix}_MAE': mae, f"{prefix}_Corr": corr, f"Post_{prefix}_MAE": mae_post, f"Post_{prefix}_Corr_Post": corr_post, f"{prefix}_ECE": ece, f"{prefix}_NLL": nll, f"Post_{prefix}_ECE": ece_post, f"Post_{prefix}_NLL": nll_post})
-            logger.debug(f'{prefix} Loss     : {total_loss:.4f}, {prefix} MAE     : {mae:.4f}, {prefix} Corr     : {corr:.4f}, Post {prefix} MAE   : {mae_post:.4f}, Post {prefix} Corr   : {corr_post:.4f}   ECE: {ece:.4f}, NLL: {nll:.4f}, Post ECE: {ece_post:.4f}, Post NLL: {nll_post:.4f}\n')
             
 
             if prefix.lower() =="test":

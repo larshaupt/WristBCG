@@ -48,8 +48,6 @@ def load_data(data_path,
 
 
     if args is not None: # taking the parameters from the args
-        subsample_ranked_train = args.subsample_ranked_train
-        subsample_ranked_val = args.subsample_ranked_val
         data_thr_avg = args.data_thr_avg
         data_thr_max = args.data_thr_max
         data_thr_angle = args.data_thr_angle
@@ -58,8 +56,6 @@ def load_data(data_path,
         bandpass_freq_max = args.bandpass_freq_max
 
     else: # if the args are not given, then the parameters are set to None, i.e. the data is not subsampled
-        subsample_ranked_train = None
-        subsample_ranked_val = None
         data_thr_avg = None
         data_thr_max = None
         data_thr_angle = None
@@ -203,15 +199,6 @@ def load_data(data_path,
         y_val = load_reconstruction_signal(val_split, data_path)
         y_test = load_reconstruction_signal(test_split, data_path)
 
-    elif args.hr_smoothing > 1:
-
-        def hr_smoother(hr, window_size=3):
-            hr = pd.Series(hr).rolling(window=window_size, center = True, min_periods=0).mean().to_numpy()
-            return hr
-
-        y_train = hr_smoother(y_train, args.hr_smoothing)
-        y_val = hr_smoother(y_val, args.hr_smoothing)
-        y_test = hr_smoother(y_test, args.hr_smoothing)
 
     if take_every_nth_train != 1:
         x_train = x_train[::take_every_nth_train]
@@ -230,27 +217,6 @@ def load_data(data_path,
         d_val = d_val[::take_every_nth_test]
         metrics_val = metrics_val[::take_every_nth_test]
 
-
-    if subsample_ranked_train != None and subsample_ranked_train != 0 and subsample_ranked_train != 1.0:
-        best_ind_train = rank_metrics(metrics_train)
-        num_values = int(len(x_train)*subsample_ranked_train)
-        x_train = x_train[best_ind_train[:num_values]]
-        y_train = y_train[best_ind_train[:num_values]]
-        d_train = d_train[best_ind_train[:num_values]]
-
-    if subsample_ranked_val != None and subsample_ranked_val != 0 and subsample_ranked_val != 1.0:
-        best_ind_val = rank_metrics(metrics_val)
-        num_values = int(len(x_val)*subsample_ranked_val)
-        x_val = x_val[best_ind_val[:num_values]]
-        y_val = y_val[best_ind_val[:num_values]]
-        d_val = d_val[best_ind_val[:num_values]]
-
-        best_ind_test = rank_metrics(metrics_test)
-        num_values = int(len(x_test)*subsample_ranked_val)
-        x_test = x_test[best_ind_test[:num_values]]
-        y_test = y_test[best_ind_test[:num_values]]
-        d_test = d_test[best_ind_test[:num_values]]
-
     
     (x_train, y_train, d_train) = filter_by_metric(metrics_train, [x_train, y_train, d_train], data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr, print_discarded=True)
     (x_val, y_val, d_val) = filter_by_metric(metrics_val, [x_val, y_val, d_val], data_thr_avg, data_thr_max, data_thr_angle, data_thr_hr, print_discarded=True)
@@ -258,6 +224,7 @@ def load_data(data_path,
 
 
     if bandpass_freq_min not in [None, 0.1,0] or bandpass_freq_max not in [None, 18, 0]:
+        # Caution: signal is by default already filtered to 0.1-18 Hz, so this is only for additional filtering
 
         if bandpass_freq_min in [None, 0.1,0]:
             sos = butter(4, bandpass_freq_max, btype='high', fs=sampling_rate, output='sos')
@@ -426,28 +393,24 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
         sampling_rate = 100
         # take the dataset, that has a couple of metrics for each window
         # the dataset with metrics is computed a little differently, so there might be differences
-        if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
-            if args.step_size == 8 and args.window_size == 10:
-                data_path = config.data_dir_Apple_processed_100hz
-            elif args.step_size == 4 and args.window_size == 5:
-                data_path = config.data_dir_Apple_processed_100hz_5w_4s
-            elif args.step_size == 4 and args.window_size == 8:
-                data_path = config.data_dir_Apple_processed_100hz_8w_4s
-            elif args.step_size == 4 and args.window_size == 10:
-                data_path = config.data_dir_Apple_processed_100hz_10w_4s
-            elif args.step_size == 4 and args.window_size == 30:
-                data_path = config.data_dir_Apple_processed_100hz_30w_4s
-            elif args.step_size == 4 and args.window_size == 60:
-                data_path = config.data_dir_Apple_processed_100hz_60w_4s
-            elif args.step_size == 1 and args.window_size == 10:
-                data_path = config.data_dir_Apple_processed_100hz_10w_1s
-            else:
-                raise ValueError(f"Invalid step size {args.step_size} for dataset {dataset}")
-        else: # load the dataset with metrics
-            if args.step_size == 8 and args.window_size == 10:
-                data_path = config.data_dir_Apple_processed_100hz_wmetrics
-            else:
-                raise ValueError(f"Invalid step size {args.step_size} for dataset {dataset}")
+       
+        if args.step_size == 8 and args.window_size == 10:
+            data_path = config.data_dir_Apple_processed_100hz
+        elif args.step_size == 4 and args.window_size == 5:
+            data_path = config.data_dir_Apple_processed_100hz_5w_4s
+        elif args.step_size == 4 and args.window_size == 8:
+            data_path = config.data_dir_Apple_processed_100hz_8w_4s
+        elif args.step_size == 4 and args.window_size == 10:
+            data_path = config.data_dir_Apple_processed_100hz_10w_4s
+        elif args.step_size == 4 and args.window_size == 30:
+            data_path = config.data_dir_Apple_processed_100hz_30w_4s
+        elif args.step_size == 4 and args.window_size == 60:
+            data_path = config.data_dir_Apple_processed_100hz_60w_4s
+        elif args.step_size == 1 and args.window_size == 10:
+            data_path = config.data_dir_Apple_processed_100hz_10w_1s
+        else:
+            raise ValueError(f"Invalid step size {args.step_size} for dataset {dataset}")
+
             
         x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args, subsample=subsample_rate, reconstruction=reconstruction, take_every_nth_train=args.take_every_nth_train, take_every_nth_test=args.take_every_nth_test, sampling_rate=sampling_rate)
     
@@ -470,12 +433,7 @@ def prep_hr(args, dataset=None, split=None, subsample_rate=1.0, reconstruction=F
     elif dataset == "parkinson100":
         sampling_rate = 100
         if args.step_size == 8 and args.window_size == 10:
-            # take the dataset that has a couple of metrics for each window
-            # will change results
-            if (args.subsample_ranked_val == None or args.subsample_ranked_val == 0.0) and (args.subsample_ranked_train == None or args.subsample_ranked_train == 0.0):
-                data_path = config.data_dir_Parkinson_processed_100Hz
-            else:
-                data_path = config.data_dir_Parkinson_processed_100Hz_wmetrics
+            data_path = config.data_dir_Parkinson_processed_100Hz_wmetrics
             x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data(data_path=data_path, split=split, args=args,  subsample=subsample_rate, reconstruction=reconstruction, sampling_rate=sampling_rate)
         else:
             raise ValueError(f"Invalid step size {args.step_size} and window size {args.window_size} for dataset {dataset}")
