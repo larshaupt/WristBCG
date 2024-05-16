@@ -1,0 +1,51 @@
+program: main.py
+name: ssl_framework_oxford_finetune
+method: grid
+metric:
+  goal: minimize
+  name: Val_Loss
+parameters:
+  backbone:
+    value: ResNET
+  dataset:
+    values:
+      - max_v2
+      - appleall
+  dropout_rate:
+    values:
+      - 0.3
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  finetune:
+    value: 1
+  framework:
+    values:
+      - oxford
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 0
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4

@@ -1,0 +1,36 @@
+program: main.py
+name: ssl_framework_reconstruction_finetune
+method: grid
+metric:
+  goal: minimize
+  name: Val_MAE
+parameters:
+  backbone:
+    value: CNN_AE
+  dataset:
+    values:
+      - max_v2
+      - appleall
+  finetune:
+    value: 1
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  framework:
+    value: reconstruction
+  loss:
+    value: MAE
+  pretrain:
+    value: 0
+  pretrain_dataset:
+    value: max_v2
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4

@@ -1,0 +1,93 @@
+program: main.py
+name: ssl_framework_finetune
+method: grid
+metric:
+  goal: minimize
+  name: Val_Loss
+parameters:
+  backbone:
+    value: CorNET
+  dataset:
+    values:
+      - max_v2
+      - appleall
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 1
+  framework:
+    values:
+      - nnclr
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 0
+  pretrain_dataset:
+    value: capture24
+  aug1:
+    values: 
+      - na
+      - noise
+      - scale
+      - negate
+      - perm
+      - shuffle
+      - t_flip
+      - t_warp
+      - resample
+      - rotation
+      - perm_jit
+      - jit_scal
+      - hfc
+      - lfc
+      - p_shift
+      - ap_p
+      - ap_f
+      - bioglass
+  aug2:
+    values:
+      - na
+      - noise
+      - scale
+      - negate
+      - perm
+      - shuffle
+      - t_flip
+      - t_warp
+      - resample
+      - rotation
+      - perm_jit
+      - jit_scal
+      - hfc
+      - lfc
+      - p_shift
+      - ap_p
+      - ap_f
+      - bioglass

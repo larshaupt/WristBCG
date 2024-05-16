@@ -1,0 +1,44 @@
+program: main.py
+name: ssl_framework_pretrain
+method: grid
+metric:
+  goal: minimize
+  name: Val_Loss
+parameters:
+  backbone:
+    value: CorNET
+  aug1:
+    value: t_warp
+  aug2:
+    value: bioglass
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 0
+  framework:
+    values:
+      - byol
+      - simsiam
+      - simclr
+      - nnclr
+      - tstcc
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 1
+  pretrain_dataset:
+    value: capture24

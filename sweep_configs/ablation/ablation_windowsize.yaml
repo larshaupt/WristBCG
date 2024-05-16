@@ -1,0 +1,64 @@
+program: main.py
+name: ablation_windowsize
+method: grid
+metric:
+  goal: minimize
+  name: Val_MAE
+parameters:
+  backbone:
+    values:
+      - CorNET
+  batch_size:
+    values:
+      - 512
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  dataset:
+    values:
+      - appleall
+      - max_v2
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 1
+  framework:
+    values:
+      - supervised
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  rnn_type:
+    value: gru
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+  step_size:
+    value: 4
+  window_size:
+    values:
+      - 5
+      - 8
+      - 10
+      - 30
+      - 60

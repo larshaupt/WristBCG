@@ -1,0 +1,64 @@
+progam: main.py
+name: ssl_numpretrainsamples_finetune
+method: grid
+metric:
+  goal: minimize
+  name: Val_Loss
+parameters:
+  aug1:
+    value: t_warp
+  aug2:
+    value: bioglass
+  backbone:
+    value: CorNET
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 1
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  framework:
+    values:
+      - nnclr
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 0
+  pretrain_dataset:
+    value: capture24
+  dataset:
+    values:
+      - max_v2
+      - appleall
+  pretrain_subsample:
+    values:
+      - 0.01
+      - 0.1
+      - 0.2
+      - 0.5
+      - 1
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4

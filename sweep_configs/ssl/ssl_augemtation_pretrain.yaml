@@ -1,0 +1,76 @@
+program: main.py
+name: ssl_framework_pretrain
+method: grid
+metric:
+  goal: minimize
+  name: Val_Loss
+parameters:
+  backbone:
+    value: CorNET
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 0
+  framework:
+    values:
+      - nnclr
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 1
+  pretrain_dataset:
+    value: capture24
+  aug1:
+    values: 
+      - na
+      - noise
+      - scale
+      - negate
+      - perm
+      - shuffle
+      - t_flip
+      - t_warp
+      - resample
+      - rotation
+      - perm_jit
+      - jit_scal
+      - hfc
+      - lfc
+      - p_shift
+      - ap_p
+      - ap_f
+      - bioglass
+  aug2:
+    values:
+      - na
+      - noise
+      - scale
+      - negate
+      - perm
+      - shuffle
+      - t_flip
+      - t_warp
+      - resample
+      - rotation
+      - perm_jit
+      - jit_scal
+      - hfc
+      - lfc
+      - p_shift
+      - ap_p
+      - ap_f
+      - bioglass

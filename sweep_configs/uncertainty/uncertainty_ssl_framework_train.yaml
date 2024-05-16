@@ -1,0 +1,60 @@
+program: main.py
+name: uncertainty_ssl_framework_train
+method: grid
+metric:
+  goal: minimize
+  name: Test_Corr
+parameters:
+  aug1:
+    value: t_warp
+  aug2:
+    value: bioglass
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  dataset:
+    values:
+      - appleall
+      - max_v2
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 1
+  framework:
+    values:
+      - nnclr
+  kernel_size:
+    values:
+      - 16
+  loss:
+    value: MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  model_uncertainty:
+    values:
+      - bnn_pretrained
+      - NLE
+      - gaussian_classification
+      - mcdropout
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 0
+  pretrain_subsample:
+    value: 0.2
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4

@@ -1,0 +1,69 @@
+program: main.py
+name: uncertainty_ensemble_train
+method: grid
+metric:
+  goal: minimize
+  name: Test_MAE
+parameters:
+  backbone:
+    values:
+      - CorNET
+  batch_size:
+    values:
+      - 512
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  dataset:
+    values:
+      - appleall
+      - max_v2
+  dropout_rate:
+    values:
+      - 0.3
+  finetune:
+    value: 1
+  framework:
+    values:
+      - nnclr
+  kernel_size:
+    values:
+      - 16
+  loss:
+    values:
+      - MAE
+  lr:
+    values:
+      - 0.0005
+  lstm_units:
+    values:
+      - 128
+  num_kernels:
+    values:
+      - 32
+  pretrain:
+    value: 0
+  random_seed:
+    values:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+  rnn_type:
+    value: gru
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
