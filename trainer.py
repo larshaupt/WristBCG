@@ -447,7 +447,7 @@ def setup_args(args):
         args.backbone == "ResNET"
 
     model_name_opt = ""
-    model_name_opt += f"_pretrain_subsample_{args.pretrain_subsample:.3f}"  if args.pretrain_subsample != 1 else ""
+    model_name_opt += f"_pretrain_nth_{args.pretrain_take_every_nth:.3f}"  if args.pretrain_take_every_nth != 1 else ""
     model_name_opt += f"_windowsize_{args.window_size}" if args.window_size != 10 else ""
     model_name_opt += f"_stepsize_{args.step_size}" if args.step_size != 8 else ""
     model_name_opt += f"_szfactor_test_{args.take_every_nth_test}" if args.take_every_nth_test != 1 else ""
@@ -466,7 +466,8 @@ def setup_args(args):
 
     lincl_model_name_opt = ""
     lincl_model_name_opt += f"_{args.model_uncertainty}" if args.model_uncertainty not in ["none", "mcdropout", "ensemble"] else ""
-    lincl_model_name_opt += f"_subsample_{args.subsample:.3f}" if args.subsample != 1 else ""
+    lincl_model_name_opt += f"_take_nth_train_{args.take_every_nth_train}" if args.take_every_nth_train != 1 else ""
+    lincl_model_name_opt += f"_take_nth_test_{args.take_every_nth_test}" if args.take_every_nth_test != 1 else ""
     lincl_model_name_opt += f"_timesplit" if args.split_by == "time" else ""
     lincl_model_name_opt += f"_disc_hr_{args.n_class}" if args.discretize_hr else ""
     lincl_model_name_opt += f"_lr_{args.lr_finetune_backbone:.1E}" if args.lr_finetune_backbone != args.lr else ""

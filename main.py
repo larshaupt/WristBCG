@@ -36,9 +36,8 @@ def get_parser():
     # dataset
     parser.add_argument('--dataset', type=str, default='appleall', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
     parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2', 'appleall'], help='name of dataset')
-    parser.add_argument('--pretrain_subsample', type=float, default=1.0, help='subsample rate for pretraining')
+    parser.add_argument('--pretrain_take_every_nth', type=float, default=1.0, help='take every nth sample, similar to increasing step size or subsampling')
     parser.add_argument('--normalize', type=bool, default=True, help='if or not to z-normalize data')
-    parser.add_argument('--subsample', type=float, default=1.0, help='subsample rate')
     parser.add_argument('--split', type=int, default=0, help='split number, needs to have split file')
     parser.add_argument('--split_by', type=str, default='subject', choices=['subject', 'time'], help='split by subject or time, needs to have split file')
 
