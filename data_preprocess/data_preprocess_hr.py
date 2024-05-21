@@ -322,6 +322,10 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
     if split is None:
         split = params.split
 
+    #####################################################################################
+    ### Change this section to load your own dataset ####################################
+    #####################################################################################
+
     if dataset == 'max':
         sampling_rate = 100
         if params.step_size == 8 and params.window_size == 10:
@@ -451,6 +455,8 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
     else:
         raise ValueError(f"Invalid dataset {dataset}")
 
+    #####################################################################################
+
     assert x_train.shape[0] == y_train.shape[0] == d_train.shape[0]
 
     if params.sampling_rate != sampling_rate and params.sampling_rate != 0:
@@ -461,7 +467,7 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
         params.sampling_rate = sampling_rate
 
     params.input_length = params.window_size * params.sampling_rate
-    breakpoint()
+
     if params.normalize:
         # normalizes the data samples using z-score normalization
         x_train = normalize_samples(x_train)
@@ -528,40 +534,3 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
 
     return train_loader, val_loader, test_loader
 
-
-
-def test_prep_hr():
-    # Define mock arguments
-    class Args:
-        data_path = config.data_dir_Max_processed
-        split = 0
-        batch_size = 32  # Adjust the batch size as needed
-
-    # Call the prep_hr function with mock arguments
-    train_loader, val_loader, test_loader = prep_hr(Args)
-
-    # Print information about the loaded data
-    print(f"Number of batches in train_loader: {len(train_loader)}")
-    print(f"Number of batches in val_loader: {len(val_loader)}")
-    print(f"Number of batches in test_loader: {len(test_loader)}")
-
-    # Print the first batch in each loader for inspection
-    print("\nFirst batch in train_loader:")
-    for i, (samples, labels, domains) in enumerate(train_loader):
-        print(f"Sample shape: {samples.shape}, Label shape: {labels.shape}, Domain shape: {domains.shape}")
-        break  # Print only the first batch
-
-    print("\nFirst batch in val_loader:")
-    for i, (samples, labels, domains) in enumerate(val_loader):
-        print(f"Sample shape: {samples.shape}, Label shape: {labels.shape}, Domain shape: {domains.shape}")
-        break  # Print only the first batch
-
-    print("\nFirst batch in test_loader:")
-    for i, (samples, labels, domains) in enumerate(test_loader):
-        print(f"Sample shape: {samples.shape}, Label shape: {labels.shape}, Domain shape: {domains.shape}")
-        break  # Print only the first batch
-
-    print("Testing prep_hr complete.")
-
-# Call the test function
-#test_prep_hr()

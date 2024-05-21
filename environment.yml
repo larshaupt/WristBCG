@@ -1,4 +1,4 @@
-name: thesis2
+name: WristBCG
 channels:
   - anaconda
   - plotly
@@ -262,4 +262,4 @@ dependencies:
       - toolz==0.12.1
       - torchsummary==1.5.1
       - werkzeug==3.0.2
-prefix: /local/home/lhauptmann/miniconda3/envs/thesis2
+prefix: /local/home/lhauptmann/miniconda3/envs/WristBCG

@@ -77,7 +77,7 @@ def setup_dataloaders(params, mode="finetuning"):
     else:
         # Raise an error if the mode is not recognized
         raise ValueError(f"Mode {mode} not recognized")
-    breakpoint()
+
     # Preprocess data and prepare data loaders
     print(f"Loading dataset {dataset} with split {split} for mode {mode}")
     train_loader, val_loader, test_loader = data_preprocess_hr.prep_hr(
@@ -163,7 +163,6 @@ def setup_model_optm(params, DEVICE):
 
                 pretrained_model_dir = params.lincl_model_file.replace("_bnn", "").replace("_pretrained", ""). replace("_firstlast", "")
                 if os.path.isfile(pretrained_model_dir):
-                    #breakpoint()
                     state_dict = torch.load(pretrained_model_dir)["trained_backbone"]
                     print("Loading backbone from {}".format(pretrained_model_dir))
                 else:
@@ -553,15 +552,15 @@ def setup_classifier(params, DEVICE, backbone):
         else:
             conv_layers.append(param)
 
-    params = [
+    optimizer_params = [
         {"params": conv_layers, "lr": params.lr, "weight_decay": params.weight_decay},
         {"params": lstm_gru_parameters, "lr": params.lr, "weight_decay": params.weight_decay}
     ]
 
     if params.optimizer == 'Adam':
-        optimizer_cls = torch.optim.Adam(params, lr=params.lr, weight_decay=params.weight_decay)
+        optimizer_cls = torch.optim.Adam(optimizer_params, lr=params.lr, weight_decay=params.weight_decay)
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Optimizer {params.optimizer} not implemented")
     
     if params.scheduler_finetune == "WarmupRoot":
         scheduler_cls = torch.optim.lr_scheduler.LambdaLR(optimizer_cls, lr_lambda=lambda epoch: min(1/np.sqrt(epoch), epoch*np.power(4,-1.5)))
@@ -673,17 +672,11 @@ def train(train_loader, val_loader, model, DEVICE, optimizers, schedulers, crite
                     model.update_moving_average()
 
                 tepoch.set_postfix(pretrain_loss=loss.item())
-        #wandb.log({'lr': optimizers[0].param_groups[0]['lr']}, step=epoch)
-        
+
         for scheduler in schedulers:
             scheduler.step()
 
-        # save model
-        #model_dir = os.path.join(params.model_dir_name, 'pretrain_' + params.model_name + str(epoch) + '.pt')
-        #print('Saving model at {} epoch to {}'.format(epoch, model_dir))
-        #torch.save({'model_state_dict': model.state_dict()}, model_dir)
-
-        wandb.log({'pretrain_training_loss': total_loss / n_batches}, step=epoch)
+        wandb.log({'pretrain_training_loss': total_loss / n_batches, 'pretrain_lr': optimizers[0].param_groups[0]['lr']}, step=epoch)
 
         if val_loader is None:
             with torch.no_grad():
@@ -703,24 +696,21 @@ def train(train_loader, val_loader, model, DEVICE, optimizers, schedulers, crite
                 if total_loss <= min_val_loss:
                     min_val_loss = total_loss
                     best_model = copy.deepcopy(model.state_dict())
-                    model_dir = os.path.join(params.model_dir_name, 'pretrain_' + params.model_name  + "_bestmodel" + '.pt')
-                    print('update: Saving model at {} epoch to {}'.format(epoch, model_dir))
-                    torch.save({'model_state_dict': model.state_dict()}, model_dir)
+                    if params.save_model:
+                        print('update: Saving model at {} epoch to {}'.format(epoch, params.pretrain_model_file))
+                        torch.save({'model_state_dict': model.state_dict()}, params.pretrain_model_file)
                     
                 wandb.log({"pretrain_validation_loss": total_loss / n_batches}, step=epoch)
                 
     return best_model
 
 
-def load_best_model(params, epoch=None):
-    if epoch is None:
-        model_dir = os.path.join(params.model_dir_name, 'pretrain_' + params.model_name + "_bestmodel" + '.pt')
-    else:
-        model_dir = os.path.join(params.model_dir_name, 'pretrain_' + params.model_name + str(epoch) + '.pt')
+def load_best_model(params):
+
+    model_dir = os.path.join(params.model_dir_name, 'pretrain_' + params.model_name + "_bestmodel" + '.pt')
 
     if not os.path.exists(model_dir):
-        print("No model found at {}".format(model_dir))
-        return None
+        raise FileNotFoundError("No model found at {}".format(model_dir))
     
     print('Loading model from {}'.format(model_dir))
     best_model = torch.load(model_dir)["model_state_dict"]
@@ -743,8 +733,7 @@ def load_best_lincls(params, device=None):
 
     model_dir = params.lincl_model_file
     if not os.path.exists(model_dir):
-        print("No model found at {}".format(model_dir))
-        return None
+        raise FileNotFoundError("No model found at {}".format(model_dir))
     best_model = torch.load(model_dir, map_location=device)['trained_backbone']
 
     return best_model
@@ -766,6 +755,7 @@ def test(test_loader, model, DEVICE, criterion, params):
         wandb.log({"pretrain_test_loss": total_loss / n_batches})
 
 def extract_backbone(model, params):
+    # Extracts the encoder part of the model
 
     if params.framework in ['simsiam', 'byol']:
         trained_backbone = model.online_encoder.net
@@ -778,7 +768,7 @@ def extract_backbone(model, params):
     elif params.framework == 'oxford':
         trained_backbone = model
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Framework {params.framework} not implemented")
     
     if params.backbone in ["AE", "CNN_AE"]:
         trained_backbone = trained_backbone.encoder
@@ -786,6 +776,7 @@ def extract_backbone(model, params):
     return trained_backbone
 
 def calculate_lincls_output(sample, target, trained_backbone, criterion, params):
+    # calculate the output of the linear classifier and computes the loss
 
     output, feat = trained_backbone(sample)
     if len(feat.shape) == 3:
@@ -808,20 +799,28 @@ def calculate_lincls_output(sample, target, trained_backbone, criterion, params)
 
 
 def add_probability_wrapper(model, params, DEVICE):
+    # Adds the probability wrapper to the model
+    # The probability wrapper is customized for different uncertainty models 
+    # and outputs
+    # - expected value of prediction 
+    # - uncertainty of prediction (determined by uncertainty_model parameter, currently only supports std)
+    # - discrete probability distribution of prediction (determined by n_classes parameter, only if return_probs is True)
 
     if params.model_uncertainty == "mcdropout":
-        model = MC_Dropout_Wrapper(model, n_classes = params.n_prob_class, n_samples = 100)
+        model = MC_Dropout_Wrapper(model, n_classes = params.n_prob_class, n_samples = 100, return_probs=True)
         
     elif params.model_uncertainty in ["bnn", "bnn_pretrained", "bnn_pretrained_firstlast"]:
-        model = BNN_Wrapper(model, n_classes=params.n_prob_class, n_samples=100)
+        model = BNN_Wrapper(model, n_classes=params.n_prob_class, n_samples=100, return_probs=True)
 
     elif params.model_uncertainty == "NLE":
-        model = NLE_Wrapper(model, n_classes=params.n_prob_class)
+        model = NLE_Wrapper(model, n_classes=params.n_prob_class, return_probs=True)
 
     elif params.model_uncertainty == "gaussian_classification":    
         model = Uncertainty_Wrapper(model, n_classes=params.n_prob_class, return_probs=True)
     
     elif params.model_uncertainty == "ensemble":
+        # load all models in the ensemble, and create an ensemble wrapper
+        # only integer random seeds between 0 and 100 supported
         model_path = params.lincl_model_file
         model_paths_seed = [model_path]
         for seed in range(100):
@@ -836,9 +835,8 @@ def add_probability_wrapper(model, params, DEVICE):
     
         model = Ensemble_Wrapper(model, model_paths_seed, n_classes=params.n_prob_class, return_probs=True)
 
-    else: # simple regression
+    else: # simple regression, outputs a delta distribution
         model = Uncertainty_Regression_Wrapper(model, n_classes=params.n_prob_class, return_probs=True)
-
 
     model = model.to(DEVICE)
 
@@ -903,7 +901,9 @@ def train_lincls(train_loader, val_loader, trained_backbone , DEVICE, optimizer,
         if val_loader is None:
             with torch.no_grad():
                 best_model = copy.deepcopy(trained_backbone.state_dict())
-                torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, params.lincl_model_file)
+                if params.save_model:
+                    print('update: Saving model at {} epoch to {}'.format(epoch, params.lincl_model_file))
+                    torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, params.lincl_model_file)
         else:
             with torch.no_grad():
                 val_loss = 0
@@ -937,9 +937,10 @@ def train_lincls(train_loader, val_loader, trained_backbone , DEVICE, optimizer,
                 if corr_val >= min_val_corr:
                     min_val_corr = corr_val
                     best_model = copy.deepcopy(trained_backbone.state_dict())
-                    torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, params.lincl_model_file)
-                    print('Saving models and results at {} epoch to {}'.format(epoch, params.predictions_dir_val))
-                    logging_table.to_pickle(params.predictions_dir_val)
+                    if params.save_model:
+                        torch.save({'trained_backbone': trained_backbone.state_dict(), 'classifier': trained_backbone.classifier.state_dict()}, params.lincl_model_file)
+                        print('Saving models and results at {} epoch to {}'.format(epoch, params.predictions_dir_val))
+                        logging_table.to_pickle(params.predictions_dir_val)
 
     return best_model
 
@@ -994,8 +995,9 @@ def test_lincls(test_loader, trained_backbone, DEVICE, criterion, params):
         mae_test = np.abs(hr_true - hr_pred).mean()
         corr_val = corr_function(hr_true, hr_pred)
         wandb.log({'Test_Loss': total_loss, 'Test_MAE': mae_test, "Test_Corr": corr_val})
-        print('Saving results to {}'.format(params.predictions_dir_test))
-        logging_table.to_pickle(params.predictions_dir_test)
+        if params.save_model:
+            print('Saving results to {}'.format(params.predictions_dir_test))
+            logging_table.to_pickle(params.predictions_dir_test)
 
 
     if params.plot_tsne:
@@ -1060,13 +1062,13 @@ def test_postprocessing(test_loader, model, postprocessing, DEVICE, criterion_cl
             nll_post = nll_loss(probs_post, target_probs)
             wandb.log({f'{prefix}_Loss': total_loss, f'{prefix}_MAE': mae, f"{prefix}_Corr": corr, f"Post_{prefix}_MAE": mae_post, f"Post_{prefix}_Corr_Post": corr_post, f"{prefix}_ECE": ece, f"{prefix}_NLL": nll, f"Post_{prefix}_ECE": ece_post, f"Post_{prefix}_NLL": nll_post})
             
-
-            if prefix.lower() =="test":
-                print('Saving results to {}'.format(params.predictions_dir_post_test))
-                pd.DataFrame(logging_table).to_pickle(params.predictions_dir_post_test)
-            else: #val
-                print('Saving results to {}'.format(params.predictions_dir_post_val))
-                pd.DataFrame(logging_table).to_pickle(params.predictions_dir_post_val)
+            if params.save_model:
+                if prefix.lower() =="test":
+                    print('Saving results to {}'.format(params.predictions_dir_post_test))
+                    pd.DataFrame(logging_table).to_pickle(params.predictions_dir_post_test)
+                else: #val
+                    print('Saving results to {}'.format(params.predictions_dir_post_val))
+                    pd.DataFrame(logging_table).to_pickle(params.predictions_dir_post_val)
 
 def setup_postprocessing_model(params):
     # BeliefPPG contains Viterbi (offline) and Sum-Product (online) as methods, by default we choose sum-product

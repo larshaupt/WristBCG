@@ -69,7 +69,7 @@ class Uncertainty_Wrapper(nn.Module):
             E_x2 = torch.sum(probs * bins[None, :] ** 2, axis=1)
             return torch.sqrt(E_x2 - E_x**2)
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"Uncertainty model {self.uncertainty_model} not implemented")
 
     def _compute_expectation_from_probs(self, probs):
         """
@@ -112,8 +112,10 @@ class Uncertainty_Wrapper(nn.Module):
         """
         if self.uncertainty_model == "entropy":
             raise NotImplementedError
-        else:
+        elif self.uncertainty_model == 'std':
             return samples.std(axis=1)
+        else:
+            raise NotImplementedError(f"Uncertainty model {self.uncertainty_model} not implemented")
 
 
 class Uncertainty_Regression_Wrapper(Uncertainty_Wrapper):

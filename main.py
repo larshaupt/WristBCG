@@ -124,6 +124,7 @@ def get_parser():
 
     #saving arguments
     parser.add_argument('--save_probabilities', type=bool, default=True, help='if or not to save probabilities')
+    parser.add_argument('--save_model', type=int, default=1, help='if or not to save model, results, and config')
 
     
     return parser
@@ -164,10 +165,11 @@ if __name__ == '__main__':
     model, optimizers, schedulers, criterion = setup(params, DEVICE)
 
     # save config file
-    config_file = os.path.join(params.lincl_model_file.replace("bestmodel.pt", "config.json"))
-    with open(config_file, "w") as outfile:
-        print(f"Saving config file to {config_file}")
-        json.dump(vars(params), outfile)
+    if params.save_model:
+        config_file = os.path.join(params.lincl_model_file.replace("bestmodel.pt", "config.json"))
+        with open(config_file, "w") as outfile:
+            print(f"Saving config file to {config_file}")
+            json.dump(vars(params), outfile)
 
     ############################################################################################################
     ############################ PRETRAINING ###################################################################
@@ -190,6 +192,7 @@ if __name__ == '__main__':
         else:
             # load best pretrain model
             if params.backbone == "ResNET":
+                # only for oxwearables model
                 model.load_weights(config.ResNET_oxwearables_weights_path)
             else:
                 pretrain_model_weights = load_best_model(params)
@@ -246,7 +249,9 @@ if __name__ == '__main__':
         
         postprocessing_model = train_postprocessing(train_loader, postprocessing_model, params)
 
+        # Validation
         test_postprocessing(val_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, params, prefix='Val')
+        # Test
         test_postprocessing(test_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, params, prefix='Test')
         
     wandb.finish()
