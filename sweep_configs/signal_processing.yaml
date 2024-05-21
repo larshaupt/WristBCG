@@ -1,0 +1,32 @@
+program: inference_classical.py
+name: signal_processing
+method: grid
+metric:
+  goal: minimize
+  name: Val_Loss
+parameters:
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  dataset:
+    values:
+      - max_v2
+      - appleall
+  framework:
+    values:
+      - Bioglass
+      - Bioglass_original
+      - SSA
+      - SSA_original
+      - Kantelhardt
+      - Kantelhardt_original
+      - median
+      - subject_median
+      - Troika
+      - Troika_w_tracking
+  split:
+    values:
+      - 0

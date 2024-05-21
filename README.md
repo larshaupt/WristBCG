@@ -15,6 +15,7 @@ conda env create -f environment.yml
 ## Experiments
 To execute all the experiments, you need to run all sweep configurations from sweep_config
 ```
+wandb login
 wandb sweep --project WristBCG LINK_TO_REPO/sweep_config/supervised_train.yaml
 wandb agent SWEEP_ID
 ```
