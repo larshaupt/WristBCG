@@ -441,7 +441,7 @@ def setup_args(params):
 
     # for backwards compatibility, all these argument are optionally added to the path and only if they are different from the default
     model_name_opt = ""
-    model_name_opt += f"_pretrain_nth_{params.pretrain_take_every_nth:.3f}"  if params.pretrain_take_every_nth != 1 else ""
+    model_name_opt += f"_pretrain_subsample_{params.pretrain_subsample:.3f}"  if params.pretrain_subsample != 1.0 else ""
     model_name_opt += f"_windowsize_{params.window_size}" if params.window_size != 10 else ""
     model_name_opt += f"_stepsize_{params.step_size}" if params.step_size != 8 else ""
     model_name_opt += f"_szfactor_test_{params.take_every_nth_test}" if params.take_every_nth_test != 1 else ""

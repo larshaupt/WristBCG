@@ -368,12 +368,19 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
             raise ValueError(f"Invalid step size {params.step_size} and window size {params.window_size} for dataset {dataset}")
     
     elif dataset == 'capture24':
+        pretrain_take_every_nth = int(1/params.take_every_nth_train)
+        assert pretrain_take_every_nth >= 1, "take_every_nth_train should be an integer larger equal than 1"
         if params.sampling_rate == 100 or params.sampling_rate == 0:
             sampling_rate = 100
             if params.step_size == 8 and params.window_size == 10:
                 data_path = config.data_dir_Capture24_processed
                 breakpoint()
-                x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,   reconstruction=reconstruction)
+                x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, 
+                                            split=split,   
+                                            reconstruction=reconstruction,
+                                            take_every_nth_test=pretrain_take_every_nth,
+                                            take_every_nth_train=pretrain_take_every_nth,
+                                            )
             
             else:
                 raise ValueError(f"Invalid step size {params.step_size} and window size {params.window_size} for dataset {dataset}")
@@ -381,7 +388,12 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
             sampling_rate = 125
             if params.step_size == 6 and params.window_size == 8:
                 data_path = config.data_dir_Capture24_processed_125Hz_8w
-                x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,   reconstruction=reconstruction)
+                x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, 
+                                            split=split,   
+                                            reconstruction=reconstruction,
+                                            take_every_nth_test=pretrain_take_every_nth,
+                                            take_every_nth_train=pretrain_take_every_nth,
+                                            )
             else:
                 raise ValueError(f"Invalid step size {params.step_size} and window size {params.window_size} for dataset {dataset}")
         else:
@@ -391,7 +403,12 @@ def prep_hr(params, dataset=None, split=None, reconstruction=False, sample_seque
             sampling_rate = 100
 
             data_path = config.data_dir_Capture24_processed_all
-            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, split=split,   reconstruction=reconstruction)
+            x_train, x_val, x_test, y_train, y_val, y_test, d_train, d_val, d_test = load_data_no_labels(data_path=data_path, 
+                                            split=split,
+                                            reconstruction=reconstruction,
+                                            take_every_nth_test=pretrain_take_every_nth,
+                                            take_every_nth_train=pretrain_take_every_nth,
+                                            )
         else:
             raise ValueError(f"Invalid step size {params.step_size} and window size {params.window_size} or sampling rate {params.sampling_rate} for dataset {dataset}")
 
