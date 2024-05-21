@@ -37,7 +37,7 @@ def get_parser():
     parser.add_argument('--dataset', type=str, default='appleall', choices=['apple','max', 'm2sleep', "m2sleep100", 'capture24', 'apple100', 'parkinson100', 'IEEE', "appleall", "max_v2", "max_hrv"], help='name of dataset for finetuning')
     parser.add_argument('--pretrain_dataset', type=str, default='capture24', choices=['max', 'apple', 'capture24', 'capture24all', 'apple100', 'parkinson100', 'max_v2', 'appleall'], help='name of dataset')
     parser.add_argument('--pretrain_take_every_nth', type=float, default=1.0, help='take every nth sample, similar to increasing step size or subsampling')
-    parser.add_argument('--normalize', type=bool, default=True, help='if or not to z-normalize data')
+    parser.add_argument('--normalize', type=int, default=1, help='if or not to z-normalize data')
     parser.add_argument('--split', type=int, default=0, help='split number, needs to have split file')
     parser.add_argument('--split_by', type=str, default='subject', choices=['subject', 'time'], help='split by subject or time, needs to have split file')
 
@@ -136,63 +136,63 @@ if __name__ == '__main__':
     ############################################################################################################
     
     parser = get_parser()
-    args = parser.parse_args()
+    params = parser.parse_args()
 
-    torch.manual_seed(args.random_seed)
-    np.random.seed(args.random_seed)
+    torch.manual_seed(params.random_seed)
+    np.random.seed(params.random_seed)
 
     # Set device, automatically select a free GPU if available and cuda == -1
-    if args.cuda == -1 or True:
-        args.cuda = int(get_free_gpu())
-        print(f"Automatically selected GPU {args.cuda}")
+    if params.cuda == -1 or True:
+        params.cuda = int(get_free_gpu())
+        print(f"Automatically selected GPU {params.cuda}")
 
     
-    DEVICE = torch.device('cuda:' + str(args.cuda) if torch.cuda.is_available() else 'cpu')
+    DEVICE = torch.device('cuda:' + str(params.cuda) if torch.cuda.is_available() else 'cpu')
     # setup model, optimizer, scheduler, criterion
-    args = setup_args(args)
-    initial_mode = 'pretraining' if args.pretrain else 'finetuning' if args.finetune else 'postprocessing'
-    train_loader, val_loader, test_loader = setup_dataloaders(args, mode=initial_mode)
+    params = setup_args(params)
+    initial_mode = 'pretraining' if params.pretrain else 'finetuning' if params.finetune else 'postprocessing'
+    train_loader, val_loader, test_loader = setup_dataloaders(params, mode=initial_mode)
 
-    if args.framework == "median":
-        predict_median(train_loader, val_loader, test_loader, args, mode="global")
+    if params.framework == "median":
+        predict_median(train_loader, val_loader, test_loader, params, mode="global")
         exit()
-    if args.framework == "subject_median":
-        predict_median(train_loader, val_loader, test_loader, args, mode="subject_wise")
+    if params.framework == "subject_median":
+        predict_median(train_loader, val_loader, test_loader, params, mode="subject_wise")
         exit()
         
 
-    model, optimizers, schedulers, criterion = setup(args, DEVICE)
+    model, optimizers, schedulers, criterion = setup(params, DEVICE)
 
     # save config file
-    config_file = os.path.join(args.lincl_model_file.replace("bestmodel.pt", "config.json"))
+    config_file = os.path.join(params.lincl_model_file.replace("bestmodel.pt", "config.json"))
     with open(config_file, "w") as outfile:
         print(f"Saving config file to {config_file}")
-        json.dump(vars(args), outfile)
+        json.dump(vars(params), outfile)
 
     ############################################################################################################
     ############################ PRETRAINING ###################################################################
     ############################################################################################################
 
-    if args.pretrain: # pretraining
+    if params.pretrain: # pretraining
         # setup dataloader for pretraining
-        #train_loader, val_loader, test_loader = setup_dataloaders(args, mode="pretraining")
-        print('device:', DEVICE, 'dataset:', args.pretrain_dataset)
-        pretrain_model_weights = train(train_loader, val_loader, model, DEVICE, optimizers, schedulers, criterion, args)
+        #train_loader, val_loader, test_loader = setup_dataloaders(params, mode="pretraining")
+        print('device:', DEVICE, 'dataset:', params.pretrain_dataset)
+        pretrain_model_weights = train(train_loader, val_loader, model, DEVICE, optimizers, schedulers, criterion, params)
         model.load_state_dict(pretrain_model_weights)
 
         if len(test_loader) != 0:
-            test(test_loader, model, DEVICE, criterion, args)
+            test(test_loader, model, DEVICE, criterion, params)
 
     else: # no pretraining, load previously trained model
-        if args.framework == 'supervised':
+        if params.framework == 'supervised':
             # take random initialization
             pass
         else:
             # load best pretrain model
-            if args.backbone == "ResNET":
+            if params.backbone == "ResNET":
                 model.load_weights(config.ResNET_oxwearables_weights_path)
             else:
-                pretrain_model_weights = load_best_model(args)
+                pretrain_model_weights = load_best_model(params)
                 model.load_state_dict(pretrain_model_weights)
 
     pretrain_model = model
@@ -202,55 +202,51 @@ if __name__ == '__main__':
     ############################ FINETUNING ####################################################################
     ############################################################################################################
 
-    trained_backbone = extract_backbone(pretrain_model, args)
+    trained_backbone = extract_backbone(pretrain_model, params)
     del pretrain_model
-    classifier, criterion_cls, optimizer_cls, scheduler_cls = setup_classifier(args, DEVICE, trained_backbone)
+    classifier, criterion_cls, optimizer_cls, scheduler_cls = setup_classifier(params, DEVICE, trained_backbone)
 
-    if args.finetune:
+    if params.finetune:
 
         # setup dataloader for finetuning
         if initial_mode != 'finetuning':
-            train_loader, val_loader, test_loader = setup_dataloaders(args, mode="finetuning")
-        print('device:', DEVICE, 'dataset:', args.dataset)
+            train_loader, val_loader, test_loader = setup_dataloaders(params, mode="finetuning")
+        print('device:', DEVICE, 'dataset:', params.dataset)
         
 
         trained_backbone.set_classification_head(classifier)
-        optimizer_cls.param_groups[0]['lr'] = args.lr_finetune_backbone
-        optimizer_cls.param_groups[1]['lr'] = args.lr_finetune_lstm
-        optimizer_cls.add_param_group({'params': trained_backbone.classifier.parameters(), 'lr': args.lr})
+        optimizer_cls.param_groups[0]['lr'] = params.lr_finetune_backbone
+        optimizer_cls.param_groups[1]['lr'] = params.lr_finetune_lstm
+        optimizer_cls.add_param_group({'params': trained_backbone.classifier.parameters(), 'lr': params.lr})
         
-        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, EVICE, optimizer_cls, criterion_cls, scheduler_cls, args)
+        trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, DEVICE, optimizer_cls, criterion_cls, scheduler_cls, params)
         trained_backbone.load_state_dict(trained_backbone_weights)
 
         if len(test_loader) != 0:
-            test_lincls(test_loader, trained_backbone, DEVICE, criterion_cls, args)
+            test_lincls(test_loader, trained_backbone, DEVICE, criterion_cls, params)
 
-    elif args.postprocessing != 'none':
-        classifier = setup_linclf(args, DEVICE, trained_backbone.out_dim)
+    elif params.postprocessing != 'none':
+        classifier = setup_linclf(params, DEVICE, trained_backbone.out_dim)
         trained_backbone.set_classification_head(classifier)
-        trained_backbone_weights = load_best_lincls(args)
+        trained_backbone_weights = load_best_lincls(params)
         trained_backbone.load_state_dict(trained_backbone_weights)
 
     ############################################################################################################
     ##########################W## POSTPROCESSING ################################################################
     ############################################################################################################
 
-    if args.postprocessing != 'none':
+    if params.postprocessing != 'none':
         criterion_post = nn.BCELoss(reduction='mean')
         if initial_mode != 'postprocessing':
-            train_loader, val_loader, test_loader = setup_dataloaders(args, mode="postprocessing")
-            print('device:', DEVICE, 'dataset:', args.dataset)
+            train_loader, val_loader, test_loader = setup_dataloaders(params, mode="postprocessing")
+            print('device:', DEVICE, 'dataset:', params.dataset)
 
-        trained_backbone = add_probability_wrapper(trained_backbone, args, DEVICE)
-        postprocessing_model = setup_postprocessing_model(args)
+        trained_backbone = add_probability_wrapper(trained_backbone, params, DEVICE)
+        postprocessing_model = setup_postprocessing_model(params)
         
-        postprocessing_model = train_postprocessing(train_loader, postprocessing_model, DEVICE, args)
+        postprocessing_model = train_postprocessing(train_loader, postprocessing_model, params)
 
-        test_postprocessing(val_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, args, prefix='Val')
-        test_postprocessing(test_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, args, prefix='Test')
+        test_postprocessing(val_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, params, prefix='Val')
+        test_postprocessing(test_loader, trained_backbone, postprocessing_model, DEVICE, criterion_post, params, prefix='Test')
         
-
-
-
-    # remove saved intermediate models
     wandb.finish()
