@@ -143,7 +143,7 @@ if __name__ == '__main__':
     np.random.seed(params.random_seed)
 
     # Set device, automatically select a free GPU if available and cuda == -1
-    if params.cuda == -1 or True:
+    if params.cuda == -1:
         params.cuda = int(get_free_gpu())
         print(f"Automatically selected GPU {params.cuda}")
 
