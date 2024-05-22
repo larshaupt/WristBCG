@@ -18,3 +18,6 @@ bash_script/
 bash_sripts/
 ssa_results.csv
 figures/
+signal_processing/*.pkl
+/*.pickle
+/*.npy
