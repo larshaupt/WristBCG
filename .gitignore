@@ -19,5 +19,7 @@ bash_sripts/
 ssa_results.csv
 figures/
 signal_processing/*.pkl
+signal_processing/*.csv
 /*.pickle
 /*.npy
+models/*.mdl
