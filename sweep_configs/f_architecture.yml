@@ -1,0 +1,34 @@
+method: grid
+metric:
+  goal: minimize
+  name: Val_MAE
+parameters:
+  data_thr_angle:
+    value: 1
+  data_thr_avg:
+    value: 0.08
+  data_thr_max:
+    value: 0.5
+  dataset:
+    values:
+      - max_v2
+      - appleall
+  finetune:
+    value: 1
+  framework:
+    values:
+      - supervised
+  loss:
+    value: MAE
+  pretrain:
+    value: 0
+  backbone:
+  
+  split:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+program: /local/home/lhauptmann/thesis/CL-HAR/main.py
