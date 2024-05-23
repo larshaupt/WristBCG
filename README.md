@@ -2,7 +2,7 @@
 
 WristBCG is part of my master's thesis, aiming at estimating the heart rate from wrist-worn accelerometers while asleep. 
 
-For more results, please refer to [results.md](results.md)
+For thre results, please refere to my thesis.
 
 ## Installation Requirements
 To install required packages, run the following code. The current Pytorch version is 2.2.1
