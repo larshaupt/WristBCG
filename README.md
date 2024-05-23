@@ -27,13 +27,13 @@ wandb agent SWEEP_ID
 python main.py --framework supervised --dataset appleall
 
 # Self-Supervised Learning
-python main.py --framework nnclr --pretrain 1 --finetune 1 --dataset appleall --pretrain_dataset capture24
+python main.py --framework nnclr --aug1 t_warp --aug2 bioglass --pretrain 1 --finetune 1 --dataset appleall --pretrain_dataset capture24
 
 # With Postprocessing
 python main.py --framework supervised --finetune 1 --model_uncertainty NLE --postprocessing sumprod --dataset appleall
 
 # With Postprocessing and Self-Supervised Learning
-python main.py --framework nnclr --pretrain_subsample 0.2 --pretrain 1 --finetune 1 --model_uncertainty NLE --postprocessing sumprod --dataset appleall
+python main.py --framework nnclr --aug1 t_warp --aug2 bioglass --pretrain_subsample 0.2 --pretrain 1 --finetune 1 --model_uncertainty NLE --postprocessing sumprod --dataset appleall
 ```
 
 ## Inference
@@ -43,13 +43,13 @@ python main.py --framework nnclr --pretrain_subsample 0.2 --pretrain 1 --finetun
 python main.py --framework supervised --dataset appleall --finetune 0
 
 # Self-supervised
-python main.py --framework nnclr --pretrain 0 --finetune 0 --dataset appleall --pretrain_dataset capture24
+python main.py --framework nnclr --aug1 t_warp --aug2 bioglass --pretrain 0 --finetune 0 --dataset appleall --pretrain_dataset capture24
 
 # With Postprocessing
 python main.py --framework supervised --finetune 0 --model_uncertainty NLE --postprocessing sumprod --dataset appleall
 
 # With Postprocessing and Self-Supervised Learning
-python main.py --framework nnclr --pretrain_subsample 0.2 --pretrain 0 --finetune 0 --model_uncertainty NLE --postprocessing sumprod --dataset appleall
+python main.py --framework nnclr --aug1 t_warp --aug2 bioglass --pretrain_subsample 0.2 --pretrain 0 --finetune 0 --model_uncertainty NLE --postprocessing sumprod --dataset appleall
 
 ```
 ## Supported Datasets
