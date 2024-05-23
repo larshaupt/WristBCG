@@ -588,9 +588,6 @@ def setup_classifier(params, DEVICE, backbone):
     return classifier, criterion_cls, optimizer_cls, scheduler_cls
 
 
-
-
-
 def calculate_model_loss(params, sample, target, model, criterion, DEVICE, recon=None, nn_replacer=None):
 
     target = target.to(DEVICE).float()
@@ -637,8 +634,8 @@ def calculate_model_loss(params, sample, target, model, criterion, DEVICE, recon
             tmp_loss = nce1 + nce2
             ctx_loss = criterion(p1, p2)
             loss = tmp_loss * params.lambda1 + ctx_loss * params.lambda2
-        if params.framework == 'supervised':
-            NotImplementedError
+        else: #params.framework == 'supervised'
+            raise NotImplementedError
         
 
     return loss
@@ -1057,10 +1054,8 @@ def test_postprocessing(test_loader, model, postprocessing, DEVICE, criterion_cl
             corr = corr_function(hr_true, hr_pred)
             corr_post = corr_function(hr_true, hr_pred_post)
             ece = ece_loss(probs, target_probs)
-            nll = nll_loss(probs, target_probs)
             ece_post = ece_loss(probs_post, target_probs)
-            nll_post = nll_loss(probs_post, target_probs)
-            wandb.log({f'{prefix}_Loss': total_loss, f'{prefix}_MAE': mae, f"{prefix}_Corr": corr, f"Post_{prefix}_MAE": mae_post, f"Post_{prefix}_Corr_Post": corr_post, f"{prefix}_ECE": ece, f"{prefix}_NLL": nll, f"Post_{prefix}_ECE": ece_post, f"Post_{prefix}_NLL": nll_post})
+            wandb.log({f'{prefix}_Loss': total_loss, f'{prefix}_MAE': mae, f"{prefix}_Corr": corr, f"Post_{prefix}_MAE": mae_post, f"Post_{prefix}_Corr_Post": corr_post, f"{prefix}_ECE": ece, f"Post_{prefix}_ECE": ece_post})
             
             if params.save_model:
                 if prefix.lower() =="test":
@@ -1115,8 +1110,15 @@ def train_postprocessing(train_loader, postprocessing_model, params):
 
 
     ys = [target for _, target, _ in train_loader]
-    # Sometimes we get a Value Error here. This is because the probabilities for some classes are too small. Taking the log will then result in infinite values
-    postprocessing_model.fit_layer(ys, distr=params.transition_distribution)
+    # Sometimes we get a Value Error here. This is because the probabilities for some classes are too small. Taking the log will then result in infinite values.
+    # We can fix this by cutting the probabilities to the nearest class
+    if len(ys) > 0 and False:
+        postprocessing_model.fit_layer(ys, distr=params.transition_distribution)
+    else:
+        print("No data found for training postprocessing model. Loading pre-trained model")
+        transition_prior_path = os.path.join(config.results_dir, "hr_state_transition_prior.pt")
+        postprocessing_model.set_transition_prior(torch.load(transition_prior_path))
+
     return postprocessing_model
 
 

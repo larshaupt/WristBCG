@@ -98,10 +98,10 @@ def get_parser():
     parser.add_argument('--criterion', type=str, default='cos_sim', choices=['cos_sim', 'NTXent', 'MSE', 'MAE'],
                         help='type of loss function for contrastive learning')
     # ssl - augmentation
-    parser.add_argument('--aug1', type=str, default='jit_scal',
+    parser.add_argument('--aug1', type=str, default='t_warp',
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
                         help='the type of augmentation transformation')
-    parser.add_argument('--aug2', type=str, default='resample',
+    parser.add_argument('--aug2', type=str, default='bioglass',
                         choices=['na', 'noise', 'scale', 'negate', 'perm', 'shuffle', 't_flip', 't_warp', 'resample', 'rotation', 'perm_jit', 'jit_scal', 'hfc', 'lfc', 'p_shift', 'ap_p', 'ap_f', 'bioglass'],
                         help='the type of augmentation transformation')
 
@@ -151,8 +151,7 @@ if __name__ == '__main__':
     DEVICE = torch.device('cuda:' + str(params.cuda) if torch.cuda.is_available() else 'cpu')
     # setup model, optimizer, scheduler, criterion
     params = setup_args(params)
-    breakpoint()
-    initial_mode = 'pretraining' if params.pretrain else 'finetuning' if params.finetune else 'postprocessing'
+    initial_mode = 'pretraining' if params.pretrain else 'finetuning' #if params.finetune else 'postprocessing'
     train_loader, val_loader, test_loader = setup_dataloaders(params, mode=initial_mode)
 
     if params.framework == "median":
@@ -210,14 +209,15 @@ if __name__ == '__main__':
     del pretrain_model
     classifier, criterion_cls, optimizer_cls, scheduler_cls = setup_classifier(params, DEVICE, trained_backbone)
 
+    if initial_mode != 'finetuning':
+        train_loader, val_loader, test_loader = setup_dataloaders(params, mode="finetuning")
+
     if params.finetune:
 
         # setup dataloader for finetuning
-        if initial_mode != 'finetuning':
-            train_loader, val_loader, test_loader = setup_dataloaders(params, mode="finetuning")
+
         print('device:', DEVICE, 'dataset:', params.dataset)
         
-
         trained_backbone.set_classification_head(classifier)
         optimizer_cls.param_groups[0]['lr'] = params.lr_finetune_backbone
         optimizer_cls.param_groups[1]['lr'] = params.lr_finetune_lstm
@@ -225,15 +225,17 @@ if __name__ == '__main__':
         
         trained_backbone_weights = train_lincls(train_loader, val_loader, trained_backbone, DEVICE, optimizer_cls, criterion_cls, scheduler_cls, params)
         trained_backbone.load_state_dict(trained_backbone_weights)
-
-        if len(test_loader) != 0:
-            test_lincls(test_loader, trained_backbone, DEVICE, criterion_cls, params)
+           
 
     elif params.postprocessing != 'none':
         classifier = setup_linclf(params, DEVICE, trained_backbone.out_dim)
         trained_backbone.set_classification_head(classifier)
         trained_backbone_weights = load_best_lincls(params)
         trained_backbone.load_state_dict(trained_backbone_weights)
+
+    # We'll run the finetune test regardless of whether we finetuned or not
+    if len(test_loader) != 0:
+        test_lincls(test_loader, trained_backbone, DEVICE, criterion_cls, params)
 
     ############################################################################################################
     ##########################W## POSTPROCESSING ################################################################

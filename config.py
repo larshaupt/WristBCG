@@ -4,9 +4,19 @@ from os.path import join
 base_dir = "/local/home/lhauptmann/thesis/"
 
 # Define all paths
+# Where to find the preprocessed data, refer to data_preprocess for preprocessing
 data_dir = join(base_dir, "data")
+# Where to find the code
+code_dir = join(base_dir, "t-mt-2023-WristBCG-LarsHauptmann" ,"WristBCG")
+# Where to save results of analysis
 analysis_dir = join(base_dir, "analysis")
-code_dir = join(base_dir, "CL-HAR")
+
+# Where to save results of signal processing
+classical_results_dir = join(code_dir, "signal_processing")
+# Where to save plots, i.e. from tSNE and make_wandb_plots
+plot_dir = join(base_dir, "images","thesis")
+# where to save models weights and results
+results_dir = join(code_dir, "results")
 
 data_dir_Apple = join(data_dir, "AppleDataset")
 analysis_dir_Apple = join(analysis_dir, "AppleDataset")
@@ -57,6 +67,3 @@ data_dir_IEEE_processed = join(data_dir, "IEEE_processed")
 
 ResNET_oxwearables_weights_path = join(code_dir, "models/mtl_best.mdl")
 
-classical_results_dir = join(code_dir, "signal_processing")
-plot_dir = join(base_dir, "images","thesis")
-results_dir = join(code_dir, "results")

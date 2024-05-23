@@ -118,9 +118,3 @@ def ece_loss(y_true, y_pred, bins=10):
             avg_confidence_in_bin = confidences[in_bin].mean()
             ece += np.abs(accuracy_in_bin - avg_confidence_in_bin) * prop_in_bin
     return ece
-
-
-def nll_loss(y_true, y_pred):
-    log_pred = np.log(y_pred[np.arange(len(y_true)), np.argmax(y_true, axis=1)])
-    log_pred[log_pred == -np.inf] = 0
-    return -np.mean(log_pred)

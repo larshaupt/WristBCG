@@ -27,6 +27,9 @@ class Postprocessing(nn.Module):
     def fit_layer(self, *args, **kwargs):
         pass
 
+    def set_transition_prior(self, transition_prior):
+        self.transition_prior = nn.Parameter(transition_prior, requires_grad=False)
+
 
     def forward(self, probs, preds, method=None):
         method = method or self.method
@@ -85,6 +88,7 @@ class BeliefPPG(Postprocessing):
         :param kwargs: passed to parent class
         """
         super(BeliefPPG, self).__init__(dim, return_probs, uncert, method)
+        # The state prior is initialized as a uniform distribution over all states
         self.state_prior = torch.tensor(np.ones(dim) / dim, dtype=torch.float32)
         self.state = nn.Parameter(self.state_prior.clone(), requires_grad=False)
         self.transition_prior = nn.Parameter(torch.zeros((self.dim, self.dim), dtype=torch.float32), requires_grad=False)
@@ -141,9 +145,9 @@ class BeliefPPG(Postprocessing):
                         self.transition_prior[i][j] = norm.cdf(max_logdiff, mu, sigma) - norm.cdf(
                             min_logdiff, mu, sigma
                         )
+                    # no need for normalization, probability leaks are handled during forward propagation   
 
-        # no need for normalization, probability leaks are handled during forward propagation
-                        
+
         if learn_state_prior:
             state_prior = torch.concat(ys).sum(0)
             state_prior = state_prior / state_prior.sum()
