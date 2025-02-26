@@ -9,6 +9,50 @@ from utils import get_free_gpu
 
 def get_parser():
 
+    """
+    Creates and configures the argument parser for the training script.
+
+    This function sets up command line arguments for various configurations, including 
+    hyperparameters, dataset specifications, training options, model choices, and logging preferences.
+    It returns the configured parser, which can then be used to parse the command line arguments.
+
+    Arguments:
+    - cuda (int): CUDA device ID for training. Default is -1 (automatically selects a free GPU).
+    - num_workers (int): Number of workers for data loading. Default is 0.
+    - random_seed (int): Random seed for reproducibility. Default is 10.
+    - pretrain (int): Flag to indicate whether to pretrain the model. Default is 0 (no pretraining).
+    - finetune (int): Flag to indicate whether to finetune the pretrained model. Default is 1 (finetune).
+    
+    Hyperparameters:
+    - pretrain_batch_size (int): Batch size for pretraining. Default is 512.
+    - batch_size (int): Batch size for training. Default is 512.
+    - n_epoch (int): Number of epochs for training. Default is 60.
+    - lr_pretrain (float): Learning rate for pretraining. Default is 1e-4.
+    - lr (float): Learning rate for training. Default is 5e-4.
+    - weight_decay (float): Weight decay for regularization. Default is 1e-7.
+    - scheduler (bool): Flag to indicate whether to use a scheduler. Default is False.
+    - optimizer (str): Optimizer for finetuning. Default is 'Adam'.
+    - loss (str): Loss function to use. Default is 'MAE'.
+    
+    Dataset:
+    - dataset (str): Name of the dataset for finetuning. Default is 'appleall'.
+    - pretrain_dataset (str): Name of the dataset for pretraining. Default is 'capture24'.
+    - normalize (int): Flag to indicate whether to normalize the data. Default is 1 (normalize).
+    
+    Model configuration:
+    - framework (str): Framework to use for training. Default is 'supervised'.
+    - backbone (str): Backbone network architecture. Default is 'CorNET'.
+    
+    Logging:
+    - wandb_mode (str): Weights and Biases logging mode. Default is 'online'.
+    - wandb_group (str): Wandb group name.
+    - wandb_project (str): Wandb project name. Default is 'hr_ssl'.
+    - wandb_tag (str): Wandb run tag.
+    
+    Returns:
+    - argparse.ArgumentParser: The argument parser configured with all the specified arguments.
+    """
+    
     # Parse command line arguments
     ##################
     parser = argparse.ArgumentParser(description='argument setting of network')
